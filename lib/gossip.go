@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ohait/gossip2/enc"
@@ -29,6 +30,40 @@ func (e CASFailed) Error() string {
 	return fmt.Sprintf("CAS Failed: given %v but expected %v", e.Given, e.Expected)
 }
 
+func convertV1(path string) (string, error) {
+	log.Printf("converting %q to v2...", path)
+	f1, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f1.Close()
+	newPath := strings.TrimSuffix(path, ".bin") + ".v2"
+	f2, err := os.Create(newPath)
+	if err != nil {
+		return "", err
+	}
+	defer f2.Close()
+	buf := &enc.Buffer{ReadWriter: f2}
+	if err := buf.WriteFull([]byte("GSP2")); err != nil {
+		return "", err
+	}
+	err = enc.ReadV1(f1, func(topic, id string, v enc.Version, data []byte) error {
+		_, err := logRecord{
+			topic: topic,
+			id:    id,
+			v:     v,
+			data:  data,
+		}.writeBuf(buf)
+		return err
+	})
+	if err != nil {
+		os.Remove(newPath)
+		return "", err
+	}
+	log.Printf("converted %q to %q", path, newPath)
+	return newPath, os.Remove(path)
+}
+
 func New(folder string) (Client, error) {
 	if err := os.MkdirAll(folder, 0o755); err != nil {
 		return nil, err
@@ -39,6 +74,13 @@ func New(folder string) (Client, error) {
 	}
 	err := cli.rangeLogs(func(path string) error {
 		log.Printf("reading %q...", path)
+		if strings.HasSuffix(path, ".bin") { // v1
+			var err error
+			path, err = convertV1(path)
+			if err != nil {
+				return err
+			}
+		}
 		l, err := cli.openLog(path)
 		if err != nil {
 			return err

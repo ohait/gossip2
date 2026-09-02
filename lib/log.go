@@ -37,34 +37,40 @@ func (r logRecord) write(l *logFile) (start int, size int, err error) {
 		return 0, 0, err
 	}
 	start = int(s)
-
-	var ct int
-
-	ct, err = l.b.WriteID(r.topic)
+	size, err = r.writeBuf(&l.b)
 	if err != nil {
 		return 0, 0, err
 	}
-	size += ct
-
-	ct, err = l.b.WriteID(r.id)
-	if err != nil {
-		return 0, 0, err
-	}
-	size += ct
-
-	ct, err = l.b.WriteUint64(uint64(r.v))
-	if err != nil {
-		return 0, 0, err
-	}
-	size += ct
-
-	ct, err = l.b.WriteData(r.data)
-	if err != nil {
-		return 0, 0, err
-	}
-	size += ct
-
 	return start, size, l.f.Sync()
+}
+
+func (r logRecord) writeBuf(b *enc.Buffer) (int, error) {
+	var size int
+	ct, err := b.WriteID(r.topic)
+	if err != nil {
+		return 0, err
+	}
+	size += ct
+
+	ct, err = b.WriteID(r.id)
+	if err != nil {
+		return 0, err
+	}
+	size += ct
+
+	ct, err = b.WriteUint64(uint64(r.v))
+	if err != nil {
+		return 0, err
+	}
+	size += ct
+
+	ct, err = b.WriteData(r.data)
+	if err != nil {
+		return 0, err
+	}
+	size += ct
+
+	return size, nil
 }
 
 func (r *logRecord) readAt(l *logFile, at int) (size int, err error) {

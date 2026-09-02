@@ -17,8 +17,14 @@ const (
 	v1MaxData     = 1 << 30
 )
 
-// readV1 loads a gossip1 GSP1 log after its four-byte header has been read.
-func convertV1(f io.ReadSeeker, cb func(topic, id string, v Version, data []byte) error) error {
+func ReadV1(f io.Reader, cb func(topic, id string, v Version, data []byte) error) error {
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(f, head); err != nil {
+		return err
+	}
+	if !bytes.Equal(head, []byte("GSP1")) {
+		return fmt.Errorf("invalid gossip1 header %q", head)
+	}
 	for {
 		topic, id, v, data, err := readV1Record(f)
 		if err == io.EOF {
@@ -33,7 +39,7 @@ func convertV1(f io.ReadSeeker, cb func(topic, id string, v Version, data []byte
 	}
 }
 
-func readV1Record(f io.ReadSeeker) (topic, id string, v Version, data []byte, err error) {
+func readV1Record(f io.Reader) (topic, id string, v Version, data []byte, err error) {
 	topic, err = readV1ID(f)
 	if err != nil {
 		return
