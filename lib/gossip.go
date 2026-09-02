@@ -14,6 +14,7 @@ type Client interface {
 	Signal(topic string, id string, data []byte) error
 	Publish(topic string, id string, old enc.Version, data []byte) (enc.Version, error)
 	Subscribe(topic string, h Handler) (func(), error)
+	Close() error
 }
 
 type Handler func(topic string, id string, v enc.Version, data []byte) error

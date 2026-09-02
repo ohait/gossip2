@@ -176,3 +176,25 @@ func (i *idx) Subscribe(topic string, h Handler) (func(), error) {
 		t.subs.Delete(id)
 	}, nil
 }
+
+// Close stops the client and releases resources.
+func (i *idx) Close() error {
+	close(i.closed)
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	if i.curLog != nil {
+		i.curLog.mu.Lock()
+		i.curLog.f.Close()
+		i.curLog.mu.Unlock()
+	}
+
+	for _, l := range i.sealedLogs {
+		l.mu.Lock()
+		l.f.Close()
+		l.mu.Unlock()
+	}
+
+	return nil
+}

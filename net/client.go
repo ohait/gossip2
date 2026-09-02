@@ -30,6 +30,8 @@ type tcpClient struct {
 	pending sync.Map[uint64, func(msg)]
 }
 
+var _ lib.Client = (*tcpClient)(nil)
+
 // Publish implements [gossip.Client].
 func (c *tcpClient) Publish(topic string, id string, v enc.Version, message []byte) (enc.Version, error) {
 	rid := rand.Uint64()
@@ -184,6 +186,14 @@ func (c *tcpClient) setup() error {
 		}
 	}()
 	return nil
+}
+
+// Close closes the connection to the server.
+func (c *tcpClient) Close() error {
+	if c.conn == nil {
+		return nil
+	}
+	return c.conn.Close()
 }
 
 func (c *tcpClient) loop() error {

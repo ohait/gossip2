@@ -292,6 +292,9 @@ func (i *idx) compact() error {
 		if !slices.Contains(todo, log) {
 			return false
 		}
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		log.f.Close()
 		os.Remove(log.f.Name())
 		return true
 	})
