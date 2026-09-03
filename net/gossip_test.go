@@ -33,6 +33,67 @@ func TestNet(t *testing.T) {
 	testBasic(t, netCli)
 }
 
+func TestNetReplay(t *testing.T) {
+	impl, err := lib.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addr := "127.0.0.1:12346"
+	server := net.Server{Client: impl}
+	if err := server.Listen(addr); err != nil {
+		t.Fatal(err)
+	}
+
+	publisher, err := net.New(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.(interface{ Close() error }).Close()
+
+	v, err := publisher.Publish("test", "FOO", 0, []byte("FOO"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v == 0 {
+		t.Fatal("expected non-zero version")
+	}
+
+	replayer, err := net.New(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayer.(interface{ Close() error }).Close()
+
+	got := make(chan struct {
+		topic string
+		id    string
+		v     lib.Version
+		data  string
+	}, 1)
+	_, err = replayer.Subscribe("test", func(topic, id string, gotVersion lib.Version, data []byte) error {
+		got <- struct {
+			topic string
+			id    string
+			v     lib.Version
+			data  string
+		}{topic, id, gotVersion, string(data)}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-got:
+		if got.topic != "test" || got.id != "FOO" || got.v != v || got.data != "FOO" {
+			t.Fatalf("replay = %+v, want topic=test id=FOO v=%d data=FOO", got, v)
+		}
+	default:
+		t.Fatal("expected FOO to be replayed")
+	}
+}
+
 func testBasic(t *testing.T, cli lib.Client) {
 	unsub, err := cli.Subscribe("test", func(topic, id string, v lib.Version, data []byte) error {
 		t.Logf("received: topic=%s, id=%s, v=%d, data=%s", topic, id, v, data)

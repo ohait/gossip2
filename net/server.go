@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -87,6 +88,10 @@ func (s *Server) handle(socket net.Conn) error {
 	enc.LOG("waiting for handshake...")
 	var head [4]byte
 	if _, err := io.ReadFull(&conn.buf, head[:]); err != nil {
+		if errors.Is(err, io.EOF) {
+			// client disconnected before sending the handshake (k8s probe?)
+			return nil
+		}
 		return err
 	}
 	if string(head[:]) != "GSP2" {
@@ -131,8 +136,8 @@ func (s *Server) handle(socket net.Conn) error {
 			}
 			select {
 			case conn.queue <- res:
-			default:
-				return io.ErrShortBuffer
+			case <-conn.gone:
+				return io.ErrClosedPipe
 			}
 		} else if err != nil {
 			// otherwise, errors are logged and connection is closed
@@ -167,8 +172,6 @@ func (conn *conn) handleOne(req, res *msg) (err error) {
 					id: id, v: v,
 					message: message,
 				}:
-				default:
-					return fmt.Errorf("channel full")
 				}
 				return nil
 			})

@@ -122,6 +122,7 @@ func newLog(folder string) (*logFile, error) {
 	}
 	_, err = f.Write([]byte("GSP2"))
 	l.total.Store(4)
+	enc.LOG("created log: %q", path)
 	return l, err
 }
 
@@ -239,13 +240,20 @@ func (i *idx) openLog(path string) (*logFile, error) {
 
 // run the compaction check
 func (i *idx) compact() error {
-	var todo []*logFile
 	i.mu.Lock()
+	if len(i.sealedLogs) < 2 {
+		i.mu.Unlock()
+		return nil
+	}
+
+	var todo []*logFile
 	for _, l := range i.sealedLogs {
 		stale := int(l.stale.Load())
-		actual := int(l.total.Load()) - stale
-		if stale > actual*4 {
-			enc.LOG("mark for compact: %q", l.f.Name())
+		total := int(l.total.Load())
+		actual := total - stale
+		if actual < MAX_LOG_SIZE/2 {
+			enc.LOG("mark for compact: %q (%.2f/%.2f MB)", l.f.Name(),
+				float64(actual)/1024/1024, float64(total)/1024/1024)
 			todo = append(todo, l)
 		}
 	}
@@ -255,10 +263,22 @@ func (i *idx) compact() error {
 	}
 
 	enc.LOG("compacting %d logs", len(todo))
+	active := 0
+	skip := 0
+	tot := 0
 	for _, rlog := range todo {
 		rlog.mu.Lock()
 		rlog.f.Seek(4, io.SeekStart)
 		err := rlog.rangeRecords(func(_, _ int, r logRecord) error {
+			t, _ := i.topics.LoadOrStore(r.topic, &topicIdx{name: r.topic})
+			p, _ := t.records.Load(r.id)
+			if p != nil && p.v == r.v {
+				active++
+			} else {
+				skip++
+				return nil // skip
+			}
+
 			// append to the current write log
 			wlog, err := i.writeLog()
 			if err != nil {
@@ -273,17 +293,17 @@ func (i *idx) compact() error {
 			wlog.mu.Unlock()
 
 			// update index
-			t, _ := i.topics.LoadOrStore(r.topic, &topicIdx{name: r.topic})
 			t.mu.Lock()
 			defer t.mu.Unlock()
 
-			p, _ := t.records.Load(r.id)
+			// check again (in case it was changed outside the lock)
+			p, _ = t.records.Load(r.id)
 			if p != nil && p.v == r.v {
+				tot += size
 				p.l = wlog
 				p.at = at
 				p.size = size
 			}
-
 			return nil
 		})
 		rlog.mu.Unlock()
@@ -291,6 +311,8 @@ func (i *idx) compact() error {
 			return err
 		}
 	}
+	enc.LOG("compacted %d records, %.2fMB, skipped %d stale records",
+		active, float64(tot)/1024/1024, skip)
 	i.mu.Lock()
 	i.sealedLogs = slices.DeleteFunc(i.sealedLogs, func(log *logFile) bool {
 		if !slices.Contains(todo, log) {
@@ -300,6 +322,7 @@ func (i *idx) compact() error {
 		defer log.mu.Unlock()
 		log.f.Close()
 		os.Remove(log.f.Name())
+		enc.LOG("removed log: %q", log.f.Name())
 		return true
 	})
 	i.mu.Unlock()

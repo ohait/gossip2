@@ -57,11 +57,15 @@ func convertV1(path string) (string, error) {
 			// failing to decompress means we assume it's uncompressed
 			raw = data
 		}
+		compressed, err := enc.Compress(raw)
+		if err != nil {
+			return err
+		}
 		_, err = logRecord{
 			topic: topic,
 			id:    id,
 			v:     v,
-			data:  raw,
+			data:  compressed,
 		}.writeBuf(buf)
 		return err
 	})

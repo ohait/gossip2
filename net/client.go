@@ -104,13 +104,14 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 	})
 
 	// send the subscribe request
-	enc.LOG("subscribing: topic=%q", topic)
+	enc.LOG("subscribing: topic=%q with rid=%d", topic, sid)
 	err = msg{
 		rid:   sid,
 		cmd:   subscribe,
 		topic: topic,
 	}.write(&c.buf)
 	if err != nil {
+		enc.LOG("subscribe error: %v", err)
 		c.subs.Delete(sid)
 		return nil, err
 	}
@@ -128,6 +129,7 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 		switch m.cmd {
 		case ack:
 			return func() {
+				enc.LOG("unsubscribing: rid=%d", sid)
 				if c.subs.Delete(sid) {
 					err := msg{
 						rid: sid,
@@ -141,6 +143,7 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 
 		case nack:
 			// subscribe failed
+			enc.LOG("subscribe failed: %s", string(m.message))
 			c.subs.Delete(sid)
 			return nil, fmt.Errorf("subscribe failed: %s", string(m.message))
 
@@ -163,31 +166,18 @@ func (c *tcpClient) connect() error {
 	c.conn = conn
 	_, err = c.conn.Write([]byte("GSP2"))
 	if err != nil {
+		enc.LOG("connect error: %v", err)
 		c.conn.Close()
 		return err
 	}
-	c.buf = enc.Buffer{ReadWriter: c}
+	c.buf = enc.Buffer{ReadWriter: c.conn}
 	return c.setup()
-}
-
-func (c *tcpClient) Write(data []byte) (int, error) {
-	c.conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-	return c.conn.Write(data)
-}
-
-func (c *tcpClient) Read(data []byte) (int, error) {
-	if len(data) == 1 {
-		c.conn.SetReadDeadline(time.Time{})
-	} else {
-		c.conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	}
-	return c.conn.Read(data)
 }
 
 func (c *tcpClient) setup() error {
 	c.closed = make(chan struct{})
 	var head [4]byte
-	_, err := io.ReadFull(c, head[:])
+	_, err := io.ReadFull(c.conn, head[:])
 	if err != nil {
 		c.conn.Close()
 		return fmt.Errorf("reading handshake: %w", err)
@@ -200,9 +190,9 @@ func (c *tcpClient) setup() error {
 		defer close(c.closed)
 		err := c.loop()
 		if errors.Is(err, net.ErrClosed) {
-			fmt.Printf("connection closed\n")
+			enc.LOG("connection closed")
 		} else {
-			fmt.Printf("loop error: %v\n", err)
+			enc.LOG("loop error: %v", err)
 			c.conn.Close()
 		}
 	}()
@@ -211,6 +201,7 @@ func (c *tcpClient) setup() error {
 
 // Close closes the connection to the server.
 func (c *tcpClient) Close() error {
+	enc.LOG("closing connection")
 	if c.conn == nil {
 		return nil
 	}
@@ -218,7 +209,7 @@ func (c *tcpClient) Close() error {
 }
 
 func (c *tcpClient) loop() error {
-	fmt.Println("waiting for messages...")
+	enc.LOG("waiting for messages...")
 	var req msg
 	for {
 		err := req.read(&c.buf)
@@ -230,7 +221,7 @@ func (c *tcpClient) loop() error {
 		case event:
 			cb, ok := c.subs.Load(req.rid)
 			if !ok {
-				enc.LOG("ignore msg for unsubscribed topic %q", req.topic)
+				enc.LOG("ignore msg for unsubscribed rid %d", req.rid)
 				continue
 			}
 			err := cb(req.topic, req.id, req.v, req.message)
@@ -246,7 +237,10 @@ func (c *tcpClient) loop() error {
 				}
 			}
 
-		case ack, nack:
+		case nack:
+			enc.LOG("nack: rid=%d", req.rid)
+			fallthrough
+		case ack:
 			cb, _ := c.pending.Load(req.rid)
 			if cb != nil {
 				cb(req)

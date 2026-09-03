@@ -85,7 +85,7 @@ func (b *Buffer) ReadID() (int, string, error) {
 		return 0, "", err
 	}
 	if buf[0] != ID {
-		return 2, "", fmt.Errorf("invalid ID: %d", buf[0])
+		return 2, "", fmt.Errorf("expected ID, got: %d", buf[0])
 	}
 	s := make([]byte, buf[1])
 	err = b.ReadFull(s)

@@ -35,7 +35,7 @@ func Decompress(raw []byte) ([]byte, error) {
 	switch raw[0] {
 	case '=':
 		return raw[1:], nil
-	case 'Z':
+	case 'Z', 'z':
 		zlibReader, err := zlib.NewReader(bytes.NewReader(raw[1:]))
 		if err != nil {
 			return nil, err

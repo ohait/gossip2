@@ -1,6 +1,8 @@
 package gossip
 
 import (
+	"fmt"
+
 	"github.com/ohait/gossip2/enc"
 	lib "github.com/ohait/gossip2/lib"
 )
@@ -25,6 +27,25 @@ type msg struct {
 	id      string
 	v       lib.Version
 	message []byte
+}
+
+func (m msg) String() string {
+	switch m.cmd {
+	case event:
+		return fmt.Sprintf("event (rid: %d) %s/%s", m.rid, m.topic, m.id)
+	case subscribe:
+		return fmt.Sprintf("subscribe (rid: %d)", m.rid)
+	case unsubscribe:
+		return fmt.Sprintf("unsubscribe (rid: %d)", m.rid)
+	case publish:
+		return fmt.Sprintf("publish (rid: %d)", m.rid)
+	case ack:
+		return fmt.Sprintf("ack (rid: %d)", m.rid)
+	case nack:
+		return fmt.Sprintf("nack (rid: %d) %s", m.rid, m.message)
+	default:
+		return fmt.Sprintf("%c (rid: %d)", m.cmd, m.rid)
+	}
 }
 
 func (m msg) write(b *enc.Buffer) error {
