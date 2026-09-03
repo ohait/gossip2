@@ -219,6 +219,7 @@ func (c *tcpClient) Close() error {
 func (c *tcpClient) loop() error {
 	var req msg
 	for {
+		c.conn.SetReadDeadline(time.Time{})
 		err := req.read(&c.buf)
 		if err != nil {
 			return err
