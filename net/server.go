@@ -3,7 +3,6 @@ package gossip
 import (
 	"fmt"
 	"io"
-	"log"
 	"net"
 
 	"github.com/ohait/gossip2/enc"
@@ -17,7 +16,7 @@ type Server struct {
 }
 
 func (s *Server) Shutdown() {
-	log.Println("shutting down...")
+	enc.LOG("shutting down...")
 	for _, l := range s.listeners {
 		l.Close() // stop accepting new connections
 	}
@@ -39,12 +38,12 @@ func (s *Server) Listen(addr string) error {
 		for {
 			conn, err := l.Accept()
 			if err != nil {
-				log.Printf("accept error: %v", err)
+				enc.LOG("accept error: %v", err)
 			}
 			go func() {
 				err := s.handle(conn)
 				if err != nil {
-					log.Printf("client fatal error: %v", err)
+					enc.LOG("client fatal error: %v", err)
 				}
 			}()
 		}
@@ -96,7 +95,7 @@ func (s *Server) handle(socket net.Conn) error {
 		for {
 			select {
 			case <-s.closing:
-				log.Println("closing...")
+				enc.LOG("closing...")
 				// TODO we should consider sending a BYE message and be graceful
 				return
 			case <-conn.gone:
@@ -104,7 +103,7 @@ func (s *Server) handle(socket net.Conn) error {
 			case msg := <-conn.queue:
 				err := msg.write(&conn.buf)
 				if err != nil {
-					log.Printf("write error: %v", err)
+					enc.LOG("write error: %v", err)
 					return
 				}
 			}
@@ -155,7 +154,7 @@ func (conn *conn) handleOne(req, res *msg) (err error) {
 		}
 		var unsub func()
 		unsub, err = conn.cli.Subscribe(req.topic,
-			func(topic, id string, v enc.Version, message []byte) error {
+			func(topic, id string, v Version, message []byte) error {
 				select {
 				case <-conn.gone:
 					return io.EOF

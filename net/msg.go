@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"github.com/ohait/gossip2/enc"
+	lib "github.com/ohait/gossip2/lib"
 )
 
 const (
@@ -22,7 +23,7 @@ type msg struct {
 	rid     uint64
 	topic   string
 	id      string
-	v       enc.Version
+	v       lib.Version
 	message []byte
 }
 
@@ -81,7 +82,7 @@ func (m *msg) read(b *enc.Buffer) error {
 	if err != nil {
 		return err
 	}
-	m.v = enc.Version(v)
+	m.v = Version(v)
 	_, m.message, err = b.ReadData()
 	if err != nil {
 		return err

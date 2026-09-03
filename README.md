@@ -69,11 +69,11 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    log.Printf("published with version %d", v)
+    LOG("published with version %d", v)
 
     // Subscribe to messages
     unsub, err := cli.Subscribe("news", func(topic, id string, v uint64, data []byte) error {
-        log.Printf("[%s] %s: %s", topic, id, string(data))
+        LOG("[%s] %s: %s", topic, id, string(data))
         return nil
     })
     if err != nil {

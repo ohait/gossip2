@@ -3,7 +3,6 @@ package gossip_test
 import (
 	"testing"
 
-	"github.com/ohait/gossip2/enc"
 	lib "github.com/ohait/gossip2/lib"
 	net "github.com/ohait/gossip2/net"
 )
@@ -35,7 +34,7 @@ func TestNet(t *testing.T) {
 }
 
 func testBasic(t *testing.T, cli lib.Client) {
-	unsub, err := cli.Subscribe("test", func(topic, id string, v enc.Version, data []byte) error {
+	unsub, err := cli.Subscribe("test", func(topic, id string, v lib.Version, data []byte) error {
 		t.Logf("received: topic=%s, id=%s, v=%d, data=%s", topic, id, v, data)
 		return nil
 	})

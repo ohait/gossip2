@@ -2,7 +2,6 @@ package gossip
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -13,17 +12,19 @@ import (
 
 type Client interface {
 	Signal(topic string, id string, data []byte) error
-	Publish(topic string, id string, old enc.Version, data []byte) (enc.Version, error)
+	Publish(topic string, id string, old Version, data []byte) (Version, error)
 	Subscribe(topic string, h Handler) (func(), error)
 	Close() error
 }
 
-type Handler func(topic string, id string, v enc.Version, data []byte) error
+type Version = enc.Version
+
+type Handler func(topic string, id string, v Version, data []byte) error
 
 // CASFailed is returned when a Compare-And-Swap check fails
 type CASFailed struct {
-	Given    enc.Version
-	Expected enc.Version
+	Given    Version
+	Expected Version
 }
 
 func (e CASFailed) Error() string {
@@ -31,7 +32,7 @@ func (e CASFailed) Error() string {
 }
 
 func convertV1(path string) (string, error) {
-	log.Printf("converting %q to v2...", path)
+	enc.LOG("converting %q to v2...", path)
 	f1, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -47,7 +48,7 @@ func convertV1(path string) (string, error) {
 	if err := buf.WriteFull([]byte("GSP2")); err != nil {
 		return "", err
 	}
-	err = enc.ReadV1(f1, func(topic, id string, v enc.Version, data []byte) error {
+	err = enc.ReadV1(f1, func(topic, id string, v Version, data []byte) error {
 		_, err := logRecord{
 			topic: topic,
 			id:    id,
@@ -60,7 +61,7 @@ func convertV1(path string) (string, error) {
 		os.Remove(newPath)
 		return "", err
 	}
-	log.Printf("converted %q to %q", path, newPath)
+	enc.LOG("converted %q to %q", path, newPath)
 	return newPath, os.Remove(path)
 }
 
@@ -73,14 +74,30 @@ func New(folder string) (Client, error) {
 		logFolder: folder,
 	}
 	err := cli.rangeLogs(func(path string) error {
-		log.Printf("reading %q...", path)
-		if strings.HasSuffix(path, ".bin") { // v1
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		var head [4]byte
+		_, err = f.Read(head[:])
+		if err != nil {
+			return err
+		}
+		f.Close()
+		switch string(head[:]) {
+		case "GSP1":
+			enc.LOG("reading V1 log %q...", path)
 			var err error
 			path, err = convertV1(path)
 			if err != nil {
 				return err
 			}
+		case "GSP2":
+			enc.LOG("reading V2 log %q...", path)
+		default:
+			return fmt.Errorf("unknown log format: %q", string(head[:]))
 		}
+
 		l, err := cli.openLog(path)
 		if err != nil {
 			return err
@@ -92,7 +109,7 @@ func New(folder string) (Client, error) {
 		return nil, err
 	}
 	for _, l := range cli.sealedLogs {
-		log.Printf("log %q has %d/%d stale bytes", l.f.Name(), l.stale.Load(), int(l.total.Load()))
+		enc.LOG("log %q has %d/%d stale bytes", l.f.Name(), l.stale.Load(), int(l.total.Load()))
 	}
 	go func() {
 		// compact loop
@@ -105,7 +122,7 @@ func New(folder string) (Client, error) {
 			}
 			err := cli.compact()
 			if err != nil {
-				log.Printf("compact error: %v", err)
+				enc.LOG("compact error: %v", err)
 			}
 		}
 	}()
@@ -115,15 +132,15 @@ func New(folder string) (Client, error) {
 // Reorder returns a Handler that filters old messages when out-of-order
 func Reorder(h Handler) Handler {
 	m := sync.Mutex{}
-	last := map[string]map[string]enc.Version{}
-	return func(topic string, id string, v enc.Version, data []byte) error {
+	last := map[string]map[string]Version{}
+	return func(topic string, id string, v Version, data []byte) error {
 		if v == 0 {
 			return h(topic, id, v, data)
 		}
 		m.Lock()
 		defer m.Unlock()
 		if last[topic] == nil {
-			last[topic] = map[string]enc.Version{}
+			last[topic] = map[string]Version{}
 		}
 		if v < last[topic][id] {
 			m.Unlock()

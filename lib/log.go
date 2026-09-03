@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"slices"
 	"sync/atomic"
@@ -26,7 +25,7 @@ type logRecord struct {
 	// layout on the file
 	topic string
 	id    string
-	v     enc.Version
+	v     Version
 	data  []byte
 }
 
@@ -101,7 +100,7 @@ func (r *logRecord) read(l *logFile) (size int, err error) {
 	var v uint64
 	ct, v, err = l.b.ReadUint64()
 	size += ct
-	r.v = enc.Version(v)
+	r.v = Version(v)
 	if err != nil {
 		return
 	}
@@ -164,7 +163,7 @@ func (l *logFile) rangeRecords(cb func(at, size int, lrec logRecord) error) erro
 			}
 			if errors.Is(err, io.ErrUnexpectedEOF) {
 				// file is truncated, we recover as much as we can
-				log.Printf("WARN: truncated log file at %d, error: %v", at, err)
+				enc.LOG("WARN: truncated log file at %d, error: %v", at, err)
 				l.total.Store(int64(at))
 				return nil
 			}
@@ -246,7 +245,7 @@ func (i *idx) compact() error {
 		stale := int(l.stale.Load())
 		actual := int(l.total.Load()) - stale
 		if stale > actual*4 {
-			log.Printf("mark for compact: %q", l.f.Name())
+			enc.LOG("mark for compact: %q", l.f.Name())
 			todo = append(todo, l)
 		}
 	}
@@ -255,7 +254,7 @@ func (i *idx) compact() error {
 		return nil
 	}
 
-	log.Printf("compacting %d logs", len(todo))
+	enc.LOG("compacting %d logs", len(todo))
 	for _, rlog := range todo {
 		rlog.mu.Lock()
 		rlog.f.Seek(4, io.SeekStart)

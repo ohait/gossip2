@@ -5,7 +5,6 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"github.com/ohait/gossip2/enc"
 	"github.com/ohait/gossip2/sync"
 )
 
@@ -35,7 +34,7 @@ type topicIdx struct {
 }
 
 type pointer struct {
-	v    enc.Version
+	v    Version
 	l    *logFile
 	at   int
 	size int
@@ -43,7 +42,7 @@ type pointer struct {
 
 // storeCAS writes a log record for the given topic and id, returning the new version
 // it locks on the topic first, then lock on the log file
-func (i *idx) storeCAS(t *topicIdx, id string, old enc.Version, data []byte) (enc.Version, error) {
+func (i *idx) storeCAS(t *topicIdx, id string, old Version, data []byte) (Version, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, _ := t.records.LoadOrStore(id, &pointer{v: old})
@@ -60,7 +59,7 @@ func (i *idx) storeCAS(t *topicIdx, id string, old enc.Version, data []byte) (en
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	newV := max(enc.Version(time.Now().UnixNano()), old+1)
+	newV := max(Version(time.Now().UnixNano()), old+1)
 	at, size, err := logRecord{topic: t.name, id: id, v: newV, data: data}.write(l)
 	if err != nil {
 		if truncateErr := l.f.Truncate(int64(at)); truncateErr != nil {
@@ -97,7 +96,7 @@ func (i *idx) writeLog() (*logFile, error) {
 	return i.curLog, nil
 }
 
-func (i *idx) Publish(topic, id string, old enc.Version, data []byte) (enc.Version, error) {
+func (i *idx) Publish(topic, id string, old Version, data []byte) (Version, error) {
 	t, _ := i.topics.LoadOrStore(topic, &topicIdx{name: topic})
 
 	v, err := i.storeCAS(t, id, old, data)

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/rand/v2"
 	"net"
 	"time"
@@ -14,7 +13,14 @@ import (
 	"github.com/ohait/gossip2/sync"
 )
 
-func New(addr string) (lib.Client, error) {
+type Client = lib.Client
+
+type Version = lib.Version
+
+func SetLogFunc(f func(fmt string, args ...any)) {
+}
+
+func New(addr string) (Client, error) {
 	client := &tcpClient{
 		addr: addr,
 	}
@@ -30,10 +36,10 @@ type tcpClient struct {
 	pending sync.Map[uint64, func(msg)]
 }
 
-var _ lib.Client = (*tcpClient)(nil)
+var _ Client = (*tcpClient)(nil)
 
 // Publish implements [gossip.Client].
-func (c *tcpClient) Publish(topic string, id string, v enc.Version, message []byte) (enc.Version, error) {
+func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []byte) (Version, error) {
 	rid := rand.Uint64()
 	ch := make(chan msg, 1)
 	c.pending.Store(rid, func(x msg) {
@@ -87,7 +93,7 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 	c.subs.Store(sid, handler)
 
 	// send the subscribe request
-	log.Printf("subscribing: topic=%q", topic)
+	enc.LOG("subscribing: topic=%q", topic)
 	err = msg{
 		rid:   sid,
 		cmd:   subscribe,
@@ -117,7 +123,7 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 						cmd: unsubscribe,
 					}.write(&c.buf)
 					if err != nil {
-						log.Printf("unsubscribe error: %v", err)
+						enc.LOG("unsubscribe error: %v", err)
 					}
 				}
 			}, nil
@@ -208,12 +214,12 @@ func (c *tcpClient) loop() error {
 		case event:
 			cb, ok := c.subs.Load(req.rid)
 			if !ok {
-				log.Printf("ignore msg for unsubscribed topic %q", req.topic)
+				enc.LOG("ignore msg for unsubscribed topic %q", req.topic)
 				continue
 			}
 			err := cb(req.topic, req.id, req.v, req.message)
 			if err != nil {
-				log.Printf("callback error: %v", err)
+				enc.LOG("callback error: %v", err)
 				c.subs.Delete(req.rid) // clean up
 				err := msg{
 					cmd: unsubscribe,

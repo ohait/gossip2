@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ohait/gossip2/enc"
 	lib "github.com/ohait/gossip2/lib"
 	gossip "github.com/ohait/gossip2/net"
 )
@@ -67,7 +68,7 @@ func main() {
 		Client: client,
 	}
 
-	log.Printf("starting server on %s", listenAddrParsed)
+	enc.LOG("starting server on %s", listenAddrParsed)
 	if err := server.Listen(listenAddrParsed); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
@@ -75,9 +76,9 @@ func main() {
 	// Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
-	log.Printf("press Ctrl+C to quit")
+	enc.LOG("press Ctrl+C to quit")
 	<-quit
-	log.Println("shutting down...")
+	enc.LOG("shutting down...")
 	server.Shutdown()
-	time.Sleep(500*time.Millisecond) // give some time, but we need graceful shutdown later
+	time.Sleep(500 * time.Millisecond) // give some time, but we need graceful shutdown later
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 )
 
@@ -14,6 +15,8 @@ const (
 	DATA   = 2
 	UINT64 = 3
 )
+
+var LOG = log.Printf
 
 type Version uint64
 
