@@ -2,7 +2,6 @@ package enc
 
 import (
 	"bytes"
-	"compress/zlib"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -11,10 +10,8 @@ import (
 )
 
 const (
-	v1PayloadRaw  = byte('=')
-	v1PayloadZlib = byte('z')
-	v1MaxID       = 1024
-	v1MaxData     = 1 << 30
+	v1MaxID   = 1024
+	v1MaxData = 1 << 30
 )
 
 func ReadV1(f io.Reader, cb func(topic, id string, v Version, data []byte) error) error {
@@ -70,15 +67,14 @@ func readV1Record(f io.Reader) (topic, id string, v Version, data []byte, err er
 		err = fmt.Errorf("data length %d exceeds maximum allowed length %d", size, v1MaxData)
 		return
 	}
-	encoded := make([]byte, size)
-	if _, err = io.ReadFull(f, encoded); err != nil {
+	data = make([]byte, size)
+	if _, err = io.ReadFull(f, data); err != nil {
 		return
 	}
-	if xxhash.Sum64(encoded) != hash {
+	if xxhash.Sum64(data) != hash {
 		err = fmt.Errorf("data hash mismatch for %s", id)
 		return
 	}
-	data, err = decodeV1Payload(encoded)
 	return
 }
 
@@ -107,23 +103,4 @@ func readV1Uint64(r io.Reader) (uint64, error) {
 	var n uint64
 	err := binary.Read(r, binary.BigEndian, &n)
 	return n, err
-}
-
-func decodeV1Payload(encoded []byte) ([]byte, error) {
-	if len(encoded) == 0 {
-		return nil, fmt.Errorf("missing payload encoding")
-	}
-	switch encoded[0] {
-	case v1PayloadRaw:
-		return append([]byte(nil), encoded[1:]...), nil
-	case v1PayloadZlib:
-		zr, err := zlib.NewReader(bytes.NewReader(encoded[1:]))
-		if err != nil {
-			return nil, err
-		}
-		defer zr.Close()
-		return io.ReadAll(zr)
-	default:
-		return nil, fmt.Errorf("unknown gossip1 payload encoding %q", encoded[0])
-	}
 }

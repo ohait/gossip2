@@ -262,11 +262,10 @@ func (i *idx) compact() error {
 		err := rlog.rangeRecords(func(_, _ int, r logRecord) error {
 			// append to the current write log
 			wlog, err := i.writeLog()
-			wlog.mu.Lock()
 			if err != nil {
-				wlog.mu.Unlock()
 				return err
 			}
+			wlog.mu.Lock()
 			at, size, err := r.write(wlog)
 			if err != nil {
 				wlog.mu.Unlock()
