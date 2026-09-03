@@ -18,7 +18,8 @@ type Version = lib.Version
 
 func New(addr string) (Client, error) {
 	client := &tcpClient{
-		addr: addr,
+		closing: make(chan struct{}),
+		addr:    addr,
 	}
 	// this ch will get an error when connecting the first time
 	// providing feedback for invalid setup but allow for reconnection
@@ -29,7 +30,7 @@ func New(addr string) (Client, error) {
 }
 
 type tcpClient struct {
-	closed  chan struct{}
+	closing chan struct{}
 	addr    string
 	conn    net.Conn
 	buf     enc.Buffer
@@ -86,15 +87,11 @@ func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []by
 		return 0, err
 	}
 
-	select {
-	case msg := <-ch:
-		if msg.cmd == ack {
-			return msg.v, nil
-		} else {
-			return 0, fmt.Errorf("cas failed: %s", msg.message)
-		}
-	case <-c.closed:
-		return 0, fmt.Errorf("closed")
+	msg := <-ch
+	if msg.cmd == ack {
+		return msg.v, nil
+	} else {
+		return 0, fmt.Errorf("cas failed: %s", msg.message)
 	}
 }
 
@@ -156,39 +153,34 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 	// wait for the replay ACK
 	// NOTE: while waiting, we will receive old messages
 	// and other data from the server
-	select {
-	case <-c.closed:
-		// connection closed
-		return nil, fmt.Errorf("closed")
+	m := <-res
 
-	case m := <-res:
+	switch m.cmd {
+	case ack:
 		// replay finished
-		switch m.cmd {
-		case ack:
-			return func() {
-				enc.LOG("unsubscribing: rid=%d", sid)
-				if c.subs.Delete(sid) {
-					err := msg{
-						rid: sid,
-						cmd: unsubscribe,
-					}.write(&c.buf)
-					if err != nil {
-						enc.LOG("unsubscribe error: %v", err)
-					}
+		return func() {
+			enc.LOG("unsubscribing: rid=%d", sid)
+			if c.subs.Delete(sid) {
+				err := msg{
+					rid: sid,
+					cmd: unsubscribe,
+				}.write(&c.buf)
+				if err != nil {
+					enc.LOG("unsubscribe error: %v", err)
 				}
-			}, nil
+			}
+		}, nil
 
-		case nack:
-			// subscribe failed
-			enc.LOG("subscribe failed: %s", string(m.message))
-			c.subs.Delete(sid)
-			return nil, fmt.Errorf("subscribe failed: %s", string(m.message))
+	case nack:
+		// subscribe failed
+		enc.LOG("subscribe failed: %s", string(m.message))
+		c.subs.Delete(sid)
+		return nil, fmt.Errorf("subscribe failed: %s", string(m.message))
 
-		default:
-			// something wrong
-			c.subs.Delete(sid)
-			return nil, fmt.Errorf("unexpected response: %v", m)
-		}
+	default:
+		// something wrong
+		c.subs.Delete(sid)
+		return nil, fmt.Errorf("unexpected response: %v", m)
 	}
 }
 
@@ -203,7 +195,7 @@ func (c *tcpClient) stayConnected(ch chan error) {
 		}
 		enc.LOG("connection error: %v", err)
 		select {
-		case <-c.closed:
+		case <-c.closing:
 			return
 		case <-timer.C:
 			enc.LOG("reconnecting...")
@@ -263,6 +255,12 @@ func (c *tcpClient) connect(ch chan error) error {
 
 // Close closes the connection to the server.
 func (c *tcpClient) Close() error {
+	select {
+	case <-c.closing:
+		return nil
+	default:
+		close(c.closing) // stop reconnecting, including while disconnected
+	}
 	enc.LOG("closing connection")
 	if c.conn == nil {
 		return nil
@@ -272,6 +270,7 @@ func (c *tcpClient) Close() error {
 
 func (c *tcpClient) loop() error {
 	defer func() {
+		// make current pending requests fail
 		c.pending.Range(func(_ uint64, f func(msg)) bool {
 			f(msg{
 				cmd:     nack,
