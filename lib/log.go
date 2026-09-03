@@ -29,9 +29,10 @@ type logRecord struct {
 	data  []byte
 }
 
-// write writes the record to the log file at the current position
+// write appends the record after any replay reads that may have moved the
+// shared file cursor.
 func (r logRecord) write(l *logFile) (start int, size int, err error) {
-	s, err := l.f.Seek(0, io.SeekCurrent)
+	s, err := l.f.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -40,6 +41,7 @@ func (r logRecord) write(l *logFile) (start int, size int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	enc.LOG("wrote record topic=%q id=%s v=%d at=%d size=%d", r.topic, r.id, r.v, start, size)
 	return start, size, l.f.Sync()
 }
 
@@ -147,6 +149,20 @@ func (i *idx) rangeLogs(cb func(path string) error) error {
 func (l *logFile) tell() (int, error) {
 	at, err := l.f.Seek(0, io.SeekCurrent)
 	return int(at), err
+}
+
+// truncate removes a failed partial append and restores the write cursor to
+// the beginning of that record. Truncate alone leaves the cursor unchanged,
+// which would make the next append create a malformed gap.
+func (l *logFile) truncate(at int) error {
+	if err := l.f.Truncate(int64(at)); err != nil {
+		return err
+	}
+	if _, err := l.f.Seek(int64(at), io.SeekStart); err != nil {
+		return err
+	}
+	l.total.Store(int64(at))
+	return nil
 }
 
 func (l *logFile) rangeRecords(cb func(at, size int, lrec logRecord) error) error {
@@ -286,11 +302,10 @@ func (i *idx) compact() error {
 			}
 			wlog.mu.Lock()
 			at, size, err := r.write(wlog)
+			wlog.mu.Unlock()
 			if err != nil {
-				wlog.mu.Unlock()
 				return err
 			}
-			wlog.mu.Unlock()
 
 			// update index
 			t.mu.Lock()

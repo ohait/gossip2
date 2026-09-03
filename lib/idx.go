@@ -63,8 +63,9 @@ func (i *idx) storeCAS(t *topicIdx, id string, old Version, data []byte) (Versio
 	newV := max(Version(time.Now().UnixNano()), old+1)
 	at, size, err := logRecord{topic: t.name, id: id, v: newV, data: data}.write(l)
 	if err != nil {
-		if truncateErr := l.f.Truncate(int64(at)); truncateErr != nil {
-			return 0, errors.Join(err, truncateErr)
+		enc.LOG("write error: topic=%q id=%s v=%d err=%v", t.name, id, newV, err)
+		if rollbackErr := l.truncate(at); rollbackErr != nil {
+			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
 	}

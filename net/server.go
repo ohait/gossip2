@@ -135,9 +135,9 @@ func (s *Server) handle(socket net.Conn) error {
 				res.message = []byte(err.Error())
 			}
 			select {
-			case conn.queue <- res:
 			case <-conn.gone:
 				return io.ErrClosedPipe
+			case conn.queue <- res:
 			}
 		} else if err != nil {
 			// otherwise, errors are logged and connection is closed
@@ -165,7 +165,7 @@ func (conn *conn) handleOne(req, res *msg) (err error) {
 			func(topic, id string, v Version, message []byte) error {
 				select {
 				case <-conn.gone:
-					return io.EOF
+					return io.ErrClosedPipe
 				case conn.queue <- msg{
 					rid: req.rid, // we broadcast to the same RID as the subscribe
 					cmd: event, topic: topic,
