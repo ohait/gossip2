@@ -1,7 +1,6 @@
 package gossip
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -21,7 +20,12 @@ func New(addr string) (Client, error) {
 	client := &tcpClient{
 		addr: addr,
 	}
-	return client, client.connect()
+	// this ch will get an error when connecting the first time
+	// providing feedback for invalid setup but allow for reconnection
+	ch := make(chan error)
+	go client.stayConnected(ch)
+	err := <-ch
+	return client, err
 }
 
 type tcpClient struct {
@@ -29,8 +33,33 @@ type tcpClient struct {
 	addr    string
 	conn    net.Conn
 	buf     enc.Buffer
-	subs    sync.Map[uint64, lib.Handler]
+	subs    sync.Map[uint64, *sub]
 	pending sync.Map[uint64, func(msg)]
+}
+
+type sub struct {
+	topic string
+	h     lib.Handler
+	mu    sync.Mutex
+	last  map[string]Version
+}
+
+// accept verify if the message is not out of order
+func (s *sub) accept(id string, v Version) bool {
+	if v == 0 {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.last == nil {
+		s.last = make(map[string]Version)
+	}
+	prev, ok := s.last[id]
+	if ok && prev >= v {
+		return false
+	}
+	s.last[id] = v
+	return true
 }
 
 var _ Client = (*tcpClient)(nil)
@@ -95,13 +124,21 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 	defer c.pending.Delete(sid)
 
 	// store the handler
-	c.subs.Store(sid, func(topic string, id string, v Version, data []byte) error {
+	sub := &sub{
+		topic: topic,
+	}
+	sub.h = func(topic string, id string, v Version, data []byte) error {
+		if !sub.accept(id, v) {
+			// enc.LOG("drop out of order: topic=%q id=%s v=%d", topic, id, v)
+			return nil
+		}
 		data, err := enc.Decompress(data)
 		if err != nil {
 			return err
 		}
 		return handler(topic, id, v, data)
-	})
+	}
+	c.subs.Store(sid, sub)
 
 	// send the subscribe request
 	enc.LOG("subscribing: topic=%q with rid=%d", topic, sid)
@@ -155,8 +192,26 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 	}
 }
 
-func (c *tcpClient) connect() error {
-	var err error
+func (c *tcpClient) stayConnected(ch chan error) {
+	timer := time.NewTimer(0)
+	for {
+		timer.Reset(5 * time.Second)
+		err := c.connect(ch)
+		select {
+		case ch <- err:
+		default:
+		}
+		enc.LOG("connection error: %v", err)
+		select {
+		case <-c.closed:
+			return
+		case <-timer.C:
+			enc.LOG("reconnecting...")
+		}
+	}
+}
+
+func (c *tcpClient) connect(ch chan error) error {
 	conn, err := (&net.Dialer{
 		KeepAlive: 10 * time.Second,
 	}).Dial("tcp", c.addr)
@@ -171,13 +226,9 @@ func (c *tcpClient) connect() error {
 		return err
 	}
 	c.buf = enc.Buffer{ReadWriter: c.conn}
-	return c.setup()
-}
 
-func (c *tcpClient) setup() error {
-	c.closed = make(chan struct{})
 	var head [4]byte
-	_, err := io.ReadFull(c.conn, head[:])
+	_, err = io.ReadFull(c.conn, head[:])
 	if err != nil {
 		c.conn.Close()
 		return fmt.Errorf("reading handshake: %w", err)
@@ -186,17 +237,28 @@ func (c *tcpClient) setup() error {
 		c.conn.Close()
 		return fmt.Errorf("invalid handshake")
 	}
-	go func() {
-		defer close(c.closed)
-		err := c.loop()
-		if errors.Is(err, net.ErrClosed) {
-			enc.LOG("connection closed")
-		} else {
-			enc.LOG("loop error: %v", err)
-			c.conn.Close()
-		}
-	}()
-	return nil
+
+	// resubscribe to all topics
+	// this will trigger a replay
+	c.subs.Range(func(sid uint64, h *sub) bool {
+		enc.LOG("re-subscribing: topic=%q with rid=%d", h.topic, sid)
+		err = msg{
+			rid:   sid,
+			cmd:   subscribe,
+			topic: h.topic,
+		}.write(&c.buf)
+		return err == nil
+	})
+	if err != nil {
+		return err
+	}
+
+	select {
+	case ch <- nil: // connected ok
+	default:
+	}
+
+	return c.loop()
 }
 
 // Close closes the connection to the server.
@@ -209,6 +271,16 @@ func (c *tcpClient) Close() error {
 }
 
 func (c *tcpClient) loop() error {
+	defer func() {
+		c.pending.Range(func(_ uint64, f func(msg)) bool {
+			f(msg{
+				cmd:     nack,
+				message: []byte("connection closed"),
+			})
+			return true
+		})
+	}()
+
 	enc.LOG("waiting for messages...")
 	var req msg
 	for {
@@ -219,12 +291,12 @@ func (c *tcpClient) loop() error {
 		switch req.cmd {
 
 		case event:
-			cb, ok := c.subs.Load(req.rid)
+			sub, ok := c.subs.Load(req.rid)
 			if !ok {
 				enc.LOG("ignore msg for unsubscribed rid %d", req.rid)
 				continue
 			}
-			err := cb(req.topic, req.id, req.v, req.message)
+			err := sub.h(req.topic, req.id, req.v, req.message)
 			if err != nil {
 				enc.LOG("callback error: %v", err)
 				c.subs.Delete(req.rid) // clean up
