@@ -40,6 +40,7 @@ func (s *Server) Listen(addr string) error {
 			if err != nil {
 				enc.LOG("accept error: %v", err)
 			}
+			enc.LOG("accepted connection from %s", conn.RemoteAddr())
 			go func() {
 				err := s.handle(conn)
 				if err != nil {
@@ -79,15 +80,17 @@ func (s *Server) handle(socket net.Conn) error {
 	}()
 
 	// GSP2 handshake: the client sends "GSP2" first, the server echoes it back.
+	if _, err := conn.buf.Write([]byte("GSP2")); err != nil {
+		return err
+	}
+
+	enc.LOG("waiting for handshake...")
 	var head [4]byte
 	if _, err := io.ReadFull(&conn.buf, head[:]); err != nil {
 		return err
 	}
 	if string(head[:]) != "GSP2" {
 		return fmt.Errorf("invalid handshake: %q", string(head[:]))
-	}
-	if _, err := conn.buf.Write([]byte("GSP2")); err != nil {
-		return err
 	}
 
 	go func() {

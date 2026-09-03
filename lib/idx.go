@@ -102,7 +102,7 @@ func (i *idx) Publish(topic, id string, old Version, data []byte) (Version, erro
 	if err != nil {
 		return 0, err
 	}
-	return i.Publish(topic, id, old, raw)
+	return i.PublishRaw(topic, id, old, raw)
 }
 
 func (i *idx) PublishRaw(topic, id string, old Version, data []byte) (Version, error) {

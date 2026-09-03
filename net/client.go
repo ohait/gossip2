@@ -17,9 +17,6 @@ type Client = lib.Client
 
 type Version = lib.Version
 
-func SetLogFunc(f func(fmt string, args ...any)) {
-}
-
 func New(addr string) (Client, error) {
 	client := &tcpClient{
 		addr: addr,
@@ -179,7 +176,11 @@ func (c *tcpClient) Write(data []byte) (int, error) {
 }
 
 func (c *tcpClient) Read(data []byte) (int, error) {
-	c.conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	if len(data) == 1 {
+		c.conn.SetReadDeadline(time.Time{})
+	} else {
+		c.conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	}
 	return c.conn.Read(data)
 }
 
@@ -189,7 +190,7 @@ func (c *tcpClient) setup() error {
 	_, err := io.ReadFull(c, head[:])
 	if err != nil {
 		c.conn.Close()
-		return err
+		return fmt.Errorf("reading handshake: %w", err)
 	}
 	if string(head[:]) != "GSP2" {
 		c.conn.Close()
@@ -217,9 +218,9 @@ func (c *tcpClient) Close() error {
 }
 
 func (c *tcpClient) loop() error {
+	fmt.Println("waiting for messages...")
 	var req msg
 	for {
-		c.conn.SetReadDeadline(time.Time{})
 		err := req.read(&c.buf)
 		if err != nil {
 			return err
