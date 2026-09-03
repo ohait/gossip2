@@ -57,7 +57,7 @@ type conn struct {
 	conn  net.Conn
 	buf   enc.Buffer
 	subs  map[uint64]func()
-	cli   lib.Client
+	cli   rawClient
 }
 
 func (s *Server) handle(socket net.Conn) error {
@@ -67,7 +67,7 @@ func (s *Server) handle(socket net.Conn) error {
 		conn:  socket,
 		buf:   enc.Buffer{ReadWriter: socket},
 		subs:  map[uint64]func(){},
-		cli:   s.Client,
+		cli:   s.Client.(rawClient),
 	}
 	defer socket.Close()
 	defer close(conn.gone)
@@ -142,10 +142,10 @@ func (conn *conn) handleOne(req, res *msg) (err error) {
 	switch req.cmd {
 
 	case event:
-		return conn.cli.Signal(req.topic, req.id, req.message)
+		return conn.cli.SignalRaw(req.topic, req.id, req.message)
 
 	case publish:
-		res.v, err = conn.cli.Publish(req.topic, req.id, req.v, req.message)
+		res.v, err = conn.cli.PublishRaw(req.topic, req.id, req.v, req.message)
 		return err
 
 	case subscribe:
@@ -153,7 +153,7 @@ func (conn *conn) handleOne(req, res *msg) (err error) {
 			return fmt.Errorf("already subscribed with id: %q", req.rid)
 		}
 		var unsub func()
-		unsub, err = conn.cli.Subscribe(req.topic,
+		unsub, err = conn.cli.SubscribeRaw(req.topic,
 			func(topic, id string, v Version, message []byte) error {
 				select {
 				case <-conn.gone:
@@ -185,4 +185,11 @@ func (conn *conn) handleOne(req, res *msg) (err error) {
 	default:
 		return fmt.Errorf("unknown command: %v", req.cmd)
 	}
+}
+
+type rawClient interface {
+	lib.Client
+	PublishRaw(topic string, id string, v Version, data []byte) (Version, error)
+	SignalRaw(topic string, id string, data []byte) error
+	SubscribeRaw(topic string, h lib.Handler) (func(), error)
 }

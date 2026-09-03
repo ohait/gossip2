@@ -31,6 +31,7 @@ func (e CASFailed) Error() string {
 	return fmt.Sprintf("CAS Failed: given %v but expected %v", e.Given, e.Expected)
 }
 
+// temporary until we deploy in dev/prod
 func convertV1(path string) (string, error) {
 	enc.LOG("converting %q to v2...", path)
 	f1, err := os.Open(path)
@@ -49,11 +50,18 @@ func convertV1(path string) (string, error) {
 		return "", err
 	}
 	err = enc.ReadV1(f1, func(topic, id string, v Version, data []byte) error {
-		_, err := logRecord{
+		raw, err := enc.Decompress(data)
+		if err != nil {
+			// gossip v1 is compressed only when working server, while
+			// not local, meaning we can only guess here
+			// failing to decompress means we assume it's uncompressed
+			raw = data
+		}
+		_, err = logRecord{
 			topic: topic,
 			id:    id,
 			v:     v,
-			data:  data,
+			data:  raw,
 		}.writeBuf(buf)
 		return err
 	})
@@ -61,6 +69,7 @@ func convertV1(path string) (string, error) {
 		os.Remove(newPath)
 		return "", err
 	}
+
 	enc.LOG("converted %q to %q", path, newPath)
 	return newPath, os.Remove(path)
 }

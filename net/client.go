@@ -40,6 +40,10 @@ var _ Client = (*tcpClient)(nil)
 
 // Publish implements [gossip.Client].
 func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []byte) (Version, error) {
+	raw, err := enc.Compress(message)
+	if err != nil {
+		return 0, err
+	}
 	rid := rand.Uint64()
 	ch := make(chan msg, 1)
 	c.pending.Store(rid, func(x msg) {
@@ -47,10 +51,10 @@ func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []by
 	})
 	defer c.pending.Delete(rid)
 
-	err := msg{
+	err = msg{
 		cmd: publish, rid: rid,
 		topic: topic, id: id,
-		v: v, message: message,
+		v: v, message: raw,
 	}.write(&c.buf)
 	if err != nil {
 		return 0, err
@@ -70,10 +74,14 @@ func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []by
 
 // Signal implements [gossip.Client].
 func (c *tcpClient) Signal(topic string, id string, message []byte) error {
+	raw, err := enc.Compress(message)
+	if err != nil {
+		return err
+	}
 	return msg{
 		cmd:   event,
 		topic: topic, id: id,
-		message: message,
+		message: raw,
 	}.write(&c.buf)
 }
 
@@ -90,7 +98,13 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 	defer c.pending.Delete(sid)
 
 	// store the handler
-	c.subs.Store(sid, handler)
+	c.subs.Store(sid, func(topic string, id string, v Version, data []byte) error {
+		data, err := enc.Decompress(data)
+		if err != nil {
+			return err
+		}
+		return handler(topic, id, v, data)
+	})
 
 	// send the subscribe request
 	enc.LOG("subscribing: topic=%q", topic)

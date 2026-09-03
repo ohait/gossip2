@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/ohait/gossip2/enc"
 	"github.com/ohait/gossip2/sync"
 )
 
@@ -97,6 +98,14 @@ func (i *idx) writeLog() (*logFile, error) {
 }
 
 func (i *idx) Publish(topic, id string, old Version, data []byte) (Version, error) {
+	raw, err := enc.Compress(data)
+	if err != nil {
+		return 0, err
+	}
+	return i.Publish(topic, id, old, raw)
+}
+
+func (i *idx) PublishRaw(topic, id string, old Version, data []byte) (Version, error) {
 	t, _ := i.topics.LoadOrStore(topic, &topicIdx{name: topic})
 
 	v, err := i.storeCAS(t, id, old, data)
@@ -117,6 +126,14 @@ func (i *idx) Publish(topic, id string, old Version, data []byte) (Version, erro
 }
 
 func (i *idx) Signal(topic, id string, data []byte) error {
+	raw, err := enc.Compress(data)
+	if err != nil {
+		return err
+	}
+	return i.SignalRaw(topic, id, raw)
+}
+
+func (i *idx) SignalRaw(topic, id string, data []byte) error {
 	t, _ := i.topics.LoadOrStore(topic, &topicIdx{name: topic})
 
 	// no need to lock here
@@ -134,6 +151,16 @@ func (i *idx) Signal(topic, id string, data []byte) error {
 // NOTE: messages might be delivered out of order
 // the client should ignore messages with older versions
 func (i *idx) Subscribe(topic string, h Handler) (func(), error) {
+	return i.SubscribeRaw(topic, func(topic string, id string, v Version, data []byte) error {
+		data, err := enc.Decompress(data)
+		if err != nil {
+			return err
+		}
+		return h(topic, id, v, data)
+	})
+}
+
+func (i *idx) SubscribeRaw(topic string, h Handler) (func(), error) {
 	t, _ := i.topics.LoadOrStore(topic, &topicIdx{name: topic})
 	id := rand.Uint64()
 
