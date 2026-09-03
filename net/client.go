@@ -166,7 +166,7 @@ func (c *tcpClient) connect() error {
 		c.conn.Close()
 		return err
 	}
-	c.buf = enc.Buffer{ReadWriter: c.conn}
+	c.buf = enc.Buffer{ReadWriter: c}
 	return c.setup()
 }
 
