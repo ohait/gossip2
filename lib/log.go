@@ -180,7 +180,7 @@ func (l *logFile) rangeRecords(cb func(at, size int, lrec logRecord) error) erro
 		}
 		size, err := lrec.read(l)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				l.total.Store(int64(at))
 				return nil
 			}
