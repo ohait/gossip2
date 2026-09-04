@@ -292,19 +292,22 @@ func (i *idx) compact() error {
 	skip := 0
 	tot := 0
 	for _, rlog := range todo {
-		rlog.mu.Lock()
+		rlog.mu.Lock() // this sealed log can't be used for writing, so it's safe to keep locked
 		rlog.f.Seek(4, io.SeekStart)
 		err := rlog.rangeRecords(func(_, _ int, r logRecord) error {
 			t, _ := i.topics.LoadOrStore(r.topic, &topicIdx{name: r.topic})
 			p, _ := t.records.Load(r.id)
+			t.mu.Lock()
 			if p != nil && p.v == r.v {
 				active++
 			} else {
 				skip++
+				t.mu.Unlock()
 				return nil // skip
 			}
+			t.mu.Unlock() // release to avoid deadlock or contention
 
-			// append to the current write log
+			// optimistically append to the current write log
 			wlog, err := i.writeLog()
 			if err != nil {
 				return fmt.Errorf("failed to write during compaction: %w", err)
@@ -321,6 +324,8 @@ func (i *idx) compact() error {
 			defer t.mu.Unlock()
 
 			// check again (in case it was changed outside the lock)
+			// this is crucial because we don't want to revert someone else CAS write
+			// if this fails, we just have to deal with more stale data later
 			p, _ = t.records.Load(r.id)
 			if p != nil && p.v == r.v {
 				tot += size
