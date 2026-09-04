@@ -34,12 +34,12 @@ type logRecord struct {
 func (r logRecord) write(l *logFile) (start int, size int, err error) {
 	s, err := l.f.Seek(0, io.SeekEnd)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("failed to seek to end: %w", err)
 	}
 	start = int(s)
 	size, err = r.writeBuf(&l.b)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("failed to write buffer: %w", err)
 	}
 	enc.LOG("wrote record topic=%q id=%s v=%d at=%d size=%d", r.topic, r.id, r.v, start, size)
 	return start, size, l.f.Sync()
@@ -49,25 +49,25 @@ func (r logRecord) writeBuf(b *enc.Buffer) (int, error) {
 	var size int
 	ct, err := b.WriteID(r.topic)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to write topic ID: %w", err)
 	}
 	size += ct
 
 	ct, err = b.WriteID(r.id)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to write record ID: %w", err)
 	}
 	size += ct
 
 	ct, err = b.WriteUint64(uint64(r.v))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to write version: %w", err)
 	}
 	size += ct
 
 	ct, err = b.WriteData(r.data)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to write data: %w", err)
 	}
 	size += ct
 
@@ -79,7 +79,7 @@ func (r *logRecord) readAt(l *logFile, at int) (size int, err error) {
 	defer l.mu.Unlock()
 
 	if _, err = l.f.Seek(int64(at), io.SeekStart); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to seek to position %d: %w", at, err)
 	}
 	return r.read(l)
 }
@@ -116,22 +116,25 @@ func newLog(folder string) (*logFile, error) {
 	path := fmt.Sprintf("%s/%s.v2", folder, time.Now().Format("20060102T150405"))
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create log file %q: %w", path, err)
 	}
 	l := &logFile{
 		f: f,
 		b: enc.Buffer{ReadWriter: f},
 	}
 	_, err = f.Write([]byte("GSP2"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to write log header: %w", err)
+	}
 	l.total.Store(4)
 	enc.LOG("created log: %q", path)
-	return l, err
+	return l, nil
 }
 
 func (i *idx) rangeLogs(cb func(path string) error) error {
 	files, err := os.ReadDir(i.logFolder)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read log directory %q: %w", i.logFolder, err)
 	}
 	for _, f := range files {
 		if f.IsDir() {
@@ -140,7 +143,7 @@ func (i *idx) rangeLogs(cb func(path string) error) error {
 		path := fmt.Sprintf("%s/%s", i.logFolder, f.Name())
 		err := cb(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to process log file %q: %w", path, err)
 		}
 	}
 	return nil
@@ -148,7 +151,10 @@ func (i *idx) rangeLogs(cb func(path string) error) error {
 
 func (l *logFile) tell() (int, error) {
 	at, err := l.f.Seek(0, io.SeekCurrent)
-	return int(at), err
+	if err != nil {
+		return 0, fmt.Errorf("failed to get file position: %w", err)
+	}
+	return int(at), nil
 }
 
 // truncate removes a failed partial append and restores the write cursor to
@@ -156,10 +162,10 @@ func (l *logFile) tell() (int, error) {
 // which would make the next append create a malformed gap.
 func (l *logFile) truncate(at int) error {
 	if err := l.f.Truncate(int64(at)); err != nil {
-		return err
+		return fmt.Errorf("failed to truncate file to %d: %w", at, err)
 	}
 	if _, err := l.f.Seek(int64(at), io.SeekStart); err != nil {
-		return err
+		return fmt.Errorf("failed to seek after truncate: %w", err)
 	}
 	l.total.Store(int64(at))
 	return nil
@@ -170,7 +176,7 @@ func (l *logFile) rangeRecords(cb func(at, size int, lrec logRecord) error) erro
 		var lrec logRecord
 		at, err := l.tell()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get file position: %w", err)
 		}
 		size, err := lrec.read(l)
 		if err != nil {
@@ -184,11 +190,11 @@ func (l *logFile) rangeRecords(cb func(at, size int, lrec logRecord) error) erro
 				l.total.Store(int64(at))
 				return nil
 			}
-			return err
+			return fmt.Errorf("failed to read record: %w", err)
 		}
 		err = cb(at, size, lrec)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to process record: %w", err)
 		}
 	}
 }
@@ -196,7 +202,7 @@ func (l *logFile) rangeRecords(cb func(at, size int, lrec logRecord) error) erro
 func (i *idx) openLog(path string) (*logFile, error) {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open log file %q: %w", path, err)
 	}
 
 	l := &logFile{
@@ -207,21 +213,21 @@ func (i *idx) openLog(path string) (*logFile, error) {
 	// seek to end to get total size
 	end, err := f.Seek(0, io.SeekEnd)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to seek to end of file: %w", err)
 	}
 	l.total.Store(int64(end))
 
 	// wind back to start
 	_, err = f.Seek(0, io.SeekStart)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to seek to start of file: %w", err)
 	}
 
 	// check header
 	var head [4]byte
 	_, err = io.ReadFull(f, head[:])
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read file header: %w", err)
 	}
 	if string(head[:]) != "GSP2" {
 		return nil, fmt.Errorf("invalid log file header")
@@ -251,7 +257,10 @@ func (i *idx) openLog(path string) (*logFile, error) {
 		}
 		return nil
 	})
-	return l, err
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log: %w", err)
+	}
+	return l, nil
 }
 
 // run the compaction check
@@ -298,13 +307,13 @@ func (i *idx) compact() error {
 			// append to the current write log
 			wlog, err := i.writeLog()
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to write during compaction: %w", err)
 			}
 			wlog.mu.Lock()
 			at, size, err := r.write(wlog)
 			wlog.mu.Unlock()
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to write record during compaction: %w", err)
 			}
 
 			// update index
@@ -323,7 +332,7 @@ func (i *idx) compact() error {
 		})
 		rlog.mu.Unlock()
 		if err != nil {
-			return err
+			return fmt.Errorf("compaction failed: %w", err)
 		}
 	}
 	enc.LOG("compacted %d records, %.2fMB, skipped %d stale records",

@@ -55,13 +55,19 @@ func (b *Buffer) Seek(offset int64, whence int) (int64, error) {
 
 func (b *Buffer) WriteByte(c byte) error {
 	_, err := b.Write([]byte{c})
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to write byte: %w", err)
+	}
+	return nil
 }
 
 func (b *Buffer) ReadByte() (byte, error) {
 	var buf [1]byte
 	err := b.ReadFull(buf[:])
-	return buf[0], err
+	if err != nil {
+		return 0, fmt.Errorf("failed to read byte: %w", err)
+	}
+	return buf[0], nil
 }
 
 func (b *Buffer) WriteID(s string) (int, error) {
@@ -73,7 +79,7 @@ func (b *Buffer) WriteID(s string) (int, error) {
 	buf[1] = byte(len(s))
 	err := b.WriteFull(buf[:])
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to write ID header: %w", err)
 	}
 	return len([]byte(s)) + 2, b.WriteFull([]byte(s))
 }
@@ -82,14 +88,17 @@ func (b *Buffer) ReadID() (int, string, error) {
 	var buf [2]byte
 	err := b.ReadFull(buf[:])
 	if err != nil {
-		return 0, "", err
+		return 0, "", fmt.Errorf("failed to read ID header: %w", err)
 	}
 	if buf[0] != ID {
 		return 2, "", fmt.Errorf("expected ID, got: %d", buf[0])
 	}
 	s := make([]byte, buf[1])
 	err = b.ReadFull(s)
-	return 2 + int(buf[1]), string(s), err
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to read ID value: %w", err)
+	}
+	return 2 + int(buf[1]), string(s), nil
 }
 
 func (b *Buffer) WriteData(data []byte) (int, error) {
@@ -98,7 +107,7 @@ func (b *Buffer) WriteData(data []byte) (int, error) {
 	binary.LittleEndian.PutUint64(buf[1:], uint64(len(data)))
 	err := b.WriteFull(buf[:])
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to write data header: %w", err)
 	}
 	return len(data) + 9, b.WriteFull(data)
 }
@@ -107,7 +116,7 @@ func (b *Buffer) ReadData() (int, []byte, error) {
 	var buf [9]byte
 	err := b.ReadFull(buf[:])
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("failed to read data header: %w", err)
 	}
 	if buf[0] != DATA {
 		return 9, nil, fmt.Errorf("invalid DATA: %d", buf[0])
@@ -118,7 +127,10 @@ func (b *Buffer) ReadData() (int, []byte, error) {
 	}
 	data := make([]byte, len)
 	err = b.ReadFull(data)
-	return 9 + int(len), data, err
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to read data value: %w", err)
+	}
+	return 9 + int(len), data, nil
 }
 
 func (b *Buffer) WriteUint64(n uint64) (int, error) {
@@ -132,7 +144,7 @@ func (b *Buffer) ReadUint64() (int, uint64, error) {
 	var buf [9]byte
 	err := b.ReadFull(buf[:])
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("failed to read uint64 header: %w", err)
 	}
 	if buf[0] != UINT64 {
 		return 9, 0, fmt.Errorf("expected UINT64 got type %d", buf[0])

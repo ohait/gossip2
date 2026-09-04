@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"time"
 
@@ -55,11 +56,14 @@ func (i *idx) storeCAS(t *topicIdx, id string, old Version, data []byte) (Versio
 	// global lock for log write
 	l, err := i.writeLog()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to write log: %w", err)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	// Use max to ensure monotonic versions (old+1) while also using current time
+	// to make versions unpredictable (preventing version prediction attacks).
+	// The max() also provides safety if the clock is adjusted backward.
 	newV := max(Version(time.Now().UnixNano()), old+1)
 	at, size, err := logRecord{topic: t.name, id: id, v: newV, data: data}.write(l)
 	if err != nil {
@@ -67,7 +71,7 @@ func (i *idx) storeCAS(t *topicIdx, id string, old Version, data []byte) (Versio
 		if rollbackErr := l.truncate(at); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
-		return 0, err
+		return 0, fmt.Errorf("write failed after rollback: %w", err)
 	}
 	if r.l != nil {
 		r.l.stale.Add(int64(r.size)) // mark stale bytes in old log file
@@ -92,7 +96,7 @@ func (i *idx) writeLog() (*logFile, error) {
 		var err error
 		i.curLog, err = newLog(i.logFolder)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create log file: %w", err)
 		}
 	}
 	return i.curLog, nil
@@ -101,7 +105,7 @@ func (i *idx) writeLog() (*logFile, error) {
 func (i *idx) Publish(topic, id string, old Version, data []byte) (Version, error) {
 	raw, err := enc.Compress(data)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to compress data: %w", err)
 	}
 	return i.PublishRaw(topic, id, old, raw)
 }
@@ -111,7 +115,7 @@ func (i *idx) PublishRaw(topic, id string, old Version, data []byte) (Version, e
 
 	v, err := i.storeCAS(t, id, old, data)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to store CAS record: %w", err)
 	}
 
 	// no need to lock here
@@ -129,7 +133,7 @@ func (i *idx) PublishRaw(topic, id string, old Version, data []byte) (Version, e
 func (i *idx) Signal(topic, id string, data []byte) error {
 	raw, err := enc.Compress(data)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to compress signal: %w", err)
 	}
 	return i.SignalRaw(topic, id, raw)
 }
@@ -155,7 +159,7 @@ func (i *idx) Subscribe(topic string, h Handler) (func(), error) {
 	return i.SubscribeRaw(topic, func(topic string, id string, v Version, data []byte) error {
 		data, err := enc.Decompress(data)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to decompress data: %w", err)
 		}
 		return h(topic, id, v, data)
 	})

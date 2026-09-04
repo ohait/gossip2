@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ohait/gossip2/enc"
-	"github.com/ohait/gossip2/sync"
 )
 
 type Client interface {
@@ -140,26 +139,4 @@ func New(folder string) (Client, error) {
 		}
 	}()
 	return cli, nil
-}
-
-// Reorder returns a Handler that filters old messages when out-of-order
-func Reorder(h Handler) Handler {
-	m := sync.Mutex{}
-	last := map[string]map[string]Version{}
-	return func(topic string, id string, v Version, data []byte) error {
-		if v == 0 {
-			return h(topic, id, v, data)
-		}
-		m.Lock()
-		defer m.Unlock()
-		if last[topic] == nil {
-			last[topic] = map[string]Version{}
-		}
-		if v < last[topic][id] {
-			m.Unlock()
-			return nil
-		}
-		last[topic][id] = v
-		return h(topic, id, v, data)
-	}
 }

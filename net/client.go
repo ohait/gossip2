@@ -69,7 +69,7 @@ var _ Client = (*tcpClient)(nil)
 func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []byte) (Version, error) {
 	raw, err := enc.Compress(message)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to compress data: %w", err)
 	}
 	rid := rand.Uint64()
 	ch := make(chan msg, 1)
@@ -84,7 +84,7 @@ func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []by
 		v: v, message: raw,
 	}.write(&c.buf)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to send publish request: %w", err)
 	}
 
 	msg := <-ch
@@ -99,7 +99,7 @@ func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []by
 func (c *tcpClient) Signal(topic string, id string, message []byte) error {
 	raw, err := enc.Compress(message)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to compress signal: %w", err)
 	}
 	return msg{
 		cmd:   event,
@@ -131,7 +131,7 @@ func (c *tcpClient) Subscribe(topic string, handler lib.Handler) (unsub func(), 
 		}
 		data, err := enc.Decompress(data)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to decompress data: %w", err)
 		}
 		return handler(topic, id, v, data)
 	}
@@ -208,14 +208,14 @@ func (c *tcpClient) connect(ch chan error) error {
 		KeepAlive: 10 * time.Second,
 	}).Dial("tcp", c.addr)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect to %s: %w", c.addr, err)
 	}
 	c.conn = conn
 	_, err = c.conn.Write([]byte("GSP2"))
 	if err != nil {
 		enc.LOG("connect error: %v", err)
 		c.conn.Close()
-		return err
+		return fmt.Errorf("failed to send handshake: %w", err)
 	}
 	c.buf = enc.Buffer{ReadWriter: c.conn}
 
@@ -242,7 +242,7 @@ func (c *tcpClient) connect(ch chan error) error {
 		return err == nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to resubscribe: %w", err)
 	}
 
 	select {
@@ -285,7 +285,7 @@ func (c *tcpClient) loop() error {
 	for {
 		err := req.read(&c.buf)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read message: %w", err)
 		}
 		switch req.cmd {
 
@@ -304,7 +304,7 @@ func (c *tcpClient) loop() error {
 					rid: req.rid,
 				}.write(&c.buf)
 				if err != nil {
-					return err // fatal failure
+					return fmt.Errorf("failed to send unsubscribe: %w", err)
 				}
 			}
 

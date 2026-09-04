@@ -32,7 +32,7 @@ func (s *Server) Listen(addr string) error {
 	}
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 	go func() {
 		defer l.Close()
@@ -82,7 +82,7 @@ func (s *Server) handle(socket net.Conn) error {
 
 	// GSP2 handshake: the client sends "GSP2" first, the server echoes it back.
 	if _, err := conn.buf.Write([]byte("GSP2")); err != nil {
-		return err
+		return fmt.Errorf("failed to send handshake: %w", err)
 	}
 
 	enc.LOG("waiting for handshake...")
@@ -92,7 +92,7 @@ func (s *Server) handle(socket net.Conn) error {
 			// client disconnected before sending the handshake (k8s probe?)
 			return nil
 		}
-		return err
+		return fmt.Errorf("failed to read handshake: %w", err)
 	}
 	if string(head[:]) != "GSP2" {
 		return fmt.Errorf("invalid handshake: %q", string(head[:]))
@@ -122,7 +122,7 @@ func (s *Server) handle(socket net.Conn) error {
 		var req msg
 		err := req.read(&conn.buf)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read request: %w", err)
 		}
 		res := msg{cmd: ack, rid: req.rid}
 		err = conn.handleOne(&req, &res)
@@ -141,7 +141,7 @@ func (s *Server) handle(socket net.Conn) error {
 			}
 		} else if err != nil {
 			// otherwise, errors are logged and connection is closed
-			return err
+			return fmt.Errorf("failed to handle request: %w", err)
 		}
 	}
 }
@@ -154,7 +154,10 @@ func (conn *conn) handleOne(req, res *msg) (err error) {
 
 	case publish:
 		res.v, err = conn.cli.PublishRaw(req.topic, req.id, req.v, req.message)
-		return err
+		if err != nil {
+			return fmt.Errorf("failed to publish %s/%s: %w", req.topic, req.id, err)
+		}
+		return nil
 
 	case subscribe:
 		if _, ok := conn.subs[req.rid]; ok {
@@ -176,7 +179,7 @@ func (conn *conn) handleOne(req, res *msg) (err error) {
 				return nil
 			})
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to subscribe to %s: %w", req.topic, err)
 		}
 		conn.subs[req.rid] = unsub
 		return nil
