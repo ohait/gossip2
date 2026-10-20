@@ -27,7 +27,7 @@ go.work.sum
 # env file
 .env
 
-logs/
+logs*/
 
 # Editor/IDE
 .idea/

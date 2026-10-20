@@ -132,7 +132,12 @@ func (s *Server) handle(socket net.Conn) error {
 			if err != nil {
 				DBG("ERROR sent to client: %v", err)
 				res.cmd = nack
-				res.message = []byte(err.Error())
+				var casErr lib.CASFailed
+				if errors.As(err, &casErr) {
+					res.message = encodeCASFailed(casErr)
+				} else {
+					res.message = []byte(err.Error())
+				}
 			}
 			select {
 			case <-conn.gone:

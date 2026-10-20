@@ -91,6 +91,9 @@ func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []by
 	if msg.cmd == ack {
 		return msg.v, nil
 	} else {
+		if casErr, ok := decodeCASFailed(msg.message); ok {
+			return 0, casErr
+		}
 		return 0, fmt.Errorf("cas failed: %s", msg.message)
 	}
 }

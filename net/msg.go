@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/ohait/gossip2/enc"
@@ -27,6 +28,26 @@ type msg struct {
 	id      string
 	v       lib.Version
 	message []byte
+}
+
+var casFailedPrefix = []byte("CAS1")
+
+func encodeCASFailed(err lib.CASFailed) []byte {
+	data := make([]byte, len(casFailedPrefix)+16)
+	copy(data, casFailedPrefix)
+	binary.BigEndian.PutUint64(data[len(casFailedPrefix):], uint64(err.Given))
+	binary.BigEndian.PutUint64(data[len(casFailedPrefix)+8:], uint64(err.Expected))
+	return data
+}
+
+func decodeCASFailed(data []byte) (lib.CASFailed, bool) {
+	if len(data) != len(casFailedPrefix)+16 || string(data[:len(casFailedPrefix)]) != string(casFailedPrefix) {
+		return lib.CASFailed{}, false
+	}
+	return lib.CASFailed{
+		Given:    lib.Version(binary.BigEndian.Uint64(data[len(casFailedPrefix):])),
+		Expected: lib.Version(binary.BigEndian.Uint64(data[len(casFailedPrefix)+8:])),
+	}, true
 }
 
 func (m msg) String() string {
