@@ -1,1 +1,2 @@
-- [ ] Check the licensing
+- [x] Check the licensing (MIT license present)
+- [ ] Decide whether MIT is the right license for Gossip 2
