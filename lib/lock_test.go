@@ -143,27 +143,27 @@ func TestGraceIsIndependentOfTTL(t *testing.T) {
 	}
 }
 
-func TestLockGraceConfig(t *testing.T) {
-	for _, tc := range []struct {
-		in   time.Duration
-		want time.Duration
-	}{
-		{0, DefaultGrace},            // zero means the default
-		{-time.Second, DefaultGrace}, // a nonsense value must not disable the quarantine
-		{5 * time.Second, 5 * time.Second},
+// There are no implicit defaults: a client that does not say how long the
+// quarantine lasts is refused, not quietly given one.
+func TestConfigValidation(t *testing.T) {
+	for _, cfg := range []Config{
+		{},
+		{Folder: t.TempDir()},
+		{Folder: t.TempDir(), LockGrace: 0},
+		{Folder: t.TempDir(), LockGrace: -time.Second},
 	} {
-		cli, err := Config{Folder: t.TempDir(), LockGrace: tc.in}.New()
-		if err != nil {
-			t.Fatalf("new with grace %v: %v", tc.in, err)
-		}
-		defer cli.Close()
-		if got := cli.(*idx).lockGrace; got != tc.want {
-			t.Fatalf("grace %v resolved to %v, want %v", tc.in, got, tc.want)
+		if _, err := cfg.New(); err == nil {
+			t.Fatalf("config %+v should have been refused", cfg)
 		}
 	}
 
-	if _, err := (Config{}).New(); err == nil {
-		t.Fatal("a config without a folder must fail")
+	cli, err := Config{Folder: t.TempDir(), LockGrace: 5 * time.Second}.New()
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	defer cli.Close()
+	if got := cli.(*idx).lockGrace; got != 5*time.Second {
+		t.Fatalf("grace is %v, want 5s", got)
 	}
 }
 
@@ -279,7 +279,7 @@ func TestLockValidation(t *testing.T) {
 func TestLeasesAreNotPersisted(t *testing.T) {
 	folder := t.TempDir()
 
-	i1, err := Config{Folder: folder}.New()
+	i1, err := Config{Folder: folder, LockGrace: DefaultGrace}.New()
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestLeasesAreNotPersisted(t *testing.T) {
 		t.Fatal("a handle from a closed client must not extend")
 	}
 
-	i2, err := Config{Folder: folder}.New()
+	i2, err := Config{Folder: folder, LockGrace: DefaultGrace}.New()
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}

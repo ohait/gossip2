@@ -78,16 +78,20 @@ func convertV1(path string) (string, error) {
 	return newPath, os.Remove(path)
 }
 
-// Config builds a client. Zero values mean defaults.
+// Config builds a client. Every field must be set: there are no implicit
+// defaults, because the ones that matter are safety properties and a silent
+// default is how they quietly stop being one.
 type Config struct {
-	// Folder holds the log files. Required.
+	// Folder holds the log files.
 	Folder string
 
 	// LockGrace is the quarantine window applied after a lease expires. It is a
 	// fixed recovery window rather than a fraction of the ttl: the window covers
 	// the previous holder's in-flight work, which has nothing to do with how long
 	// the lease was meant to last. A 1s lease gets the same window as a 1h one.
-	// Zero means DefaultGrace.
+	// Must be positive: a zero grace means no quarantine at all, which is exactly
+	// what the window exists to prevent. Use lib.DefaultGrace if you have no
+	// reason to pick a number.
 	LockGrace time.Duration
 }
 
@@ -95,19 +99,18 @@ func (c Config) New() (Client, error) {
 	if c.Folder == "" {
 		return nil, fmt.Errorf("config: folder is required")
 	}
+	if c.LockGrace <= 0 {
+		return nil, fmt.Errorf("config: LockGrace must be positive (try lib.DefaultGrace)")
+	}
 	if err := os.MkdirAll(c.Folder, 0o755); err != nil {
 		return nil, err
-	}
-	grace := c.LockGrace
-	if grace <= 0 {
-		grace = DefaultGrace
 	}
 	cli := &idx{
 		closed:    make(chan struct{}),
 		logFolder: c.Folder,
 		locks:     map[string]*lockEntry{},
 		holds:     map[string]*LockHandle{},
-		lockGrace: grace,
+		lockGrace: c.LockGrace,
 		now:       time.Now,
 	}
 	err := cli.rangeLogs(func(path string) error {
