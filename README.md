@@ -11,6 +11,7 @@ type Client interface {
     Signal(topic string, id string, data []byte) error
     Publish(topic string, id string, old Version, data []byte) (Version, error)
     Subscribe(topic string, h Handler) (func(), error)
+    Lock(key string, ttl, timeout time.Duration) (LockHandle, error)
     Close() error
 }
 
@@ -33,7 +34,43 @@ Subscribes to messages on a topic. The handler is called for each message publis
 
 #### `Close()`
 
-Closes the client and releases its network connection or open log files. Call it when the client is no longer needed.
+Closes the client and releases its network connection or open log files. Call it when the client is no longer needed. Closing a client also releases the locks it still holds.
+
+### Locks
+
+`Lock(key, ttl, timeout)` is a short-lived, in-memory lease on a key. It blocks until the key is free, `timeout` elapses (then `ErrLockTimeout`), or the client is closed. Locks are not persisted: a server restart wipes them.
+
+```go
+handle, err := cli.Lock("shipment-42", 30*time.Second, 5*time.Minute)
+if err != nil {
+    return err // ErrLockTimeout, or a plain error
+}
+defer handle.Release()
+
+// do work, keep the lease alive if it is long running
+if err := handle.Extends(); err != nil {
+    return err // the lease is gone
+}
+```
+
+```go
+handle.Key()      string
+handle.Expired()  bool      // local, approximate: the server is authoritative
+handle.Deadline() time.Time // local view of when the lease expires
+handle.Extends()  error     // renew the lease; fails once the lease is dead
+handle.Release()  error     // free the key immediately
+```
+
+A lease is held for `ttl` and then enters a fixed cooldown of 30 seconds (independent of `ttl`, configurable with `lib.WithLockGrace` or the server's `-lock-grace`) during which nobody can take the key. Expiry is terminal: an expired lease can neither be extended nor released. An explicit `Release()` skips the cooldown. Ownership is proven by a CAS version the handle carries internally, so a handle survives a reconnect: the lease lives in the server, not in the connection.
+
+A client blocks like any other contender on a key it already holds; reentrancy is not part of the API.
+
+```go
+handle, err := cli.Lock("doc-1", 10*time.Second, time.Minute)
+if errors.Is(err, lib.ErrLockTimeout) {
+    // the key was not free within the timeout
+}
+```
 
 ### Version Type
 
@@ -83,17 +120,25 @@ func main() {
 
     // Signal a message (no CAS, always succeeds)
     cli.Signal("alerts", "alert-1", []byte("Server needs restart"))
+
+    // Lock a key for 30 seconds, waiting at most 5 minutes for it
+    h, err := cli.Lock("shipment-42", 30*time.Second, 5*time.Minute)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer h.Release()
 }
 ```
 
 ### Running as a TCP Server
 
 ```
-gossip2 [-l addr] folder
+gossip2 [-l addr] [-lock-grace duration] folder
 ```
 
 - `folder` — directory for log files
 - `-l addr` — listen address (default: `localhost:1337`)
+- `-lock-grace` — quarantine window after a lock lease expires (default: `30s`)
 
 **Example:**
 ```bash
