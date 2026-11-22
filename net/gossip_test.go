@@ -9,7 +9,7 @@ import (
 
 func TestLocal(t *testing.T) {
 	dir := t.TempDir()
-	cli, err := lib.New(dir)
+	cli, err := lib.Config{Folder: dir}.New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestLocal(t *testing.T) {
 func TestNet(t *testing.T) {
 	net.DBG = t.Logf
 	dir := t.TempDir()
-	impl, err := lib.New(dir)
+	impl, err := lib.Config{Folder: dir}.New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestNet(t *testing.T) {
 }
 
 func TestNetReplay(t *testing.T) {
-	impl, err := lib.New(t.TempDir())
+	impl, err := lib.Config{Folder: t.TempDir()}.New()
 	if err != nil {
 		t.Fatal(err)
 	}

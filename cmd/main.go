@@ -59,7 +59,7 @@ func main() {
 	listenAddrParsed := net.JoinHostPort(host, port)
 
 	// Create the client (which manages logs)
-	client, err := lib.New(folder, lib.WithLockGrace(*lockGrace))
+	client, err := lib.Config{Folder: folder, LockGrace: *lockGrace}.New()
 	if err != nil {
 		log.Fatalf("failed to create client: %v", err)
 	}

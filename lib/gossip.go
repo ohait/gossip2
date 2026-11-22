@@ -78,36 +78,37 @@ func convertV1(path string) (string, error) {
 	return newPath, os.Remove(path)
 }
 
-// Option configures the client at construction.
-type Option func(*idx)
+// Config builds a client. Zero values mean defaults.
+type Config struct {
+	// Folder holds the log files. Required.
+	Folder string
 
-// WithLockGrace sets the quarantine window applied after a lease expires.
-// It is a fixed recovery window rather than a fraction of the ttl: the window
-// covers the previous holder's in-flight work, which has nothing to do with how
-// long the lease was meant to last. A 1s lease gets the same window as a 1h one.
-// Values <= 0 are ignored; the default is DefaultGrace.
-func WithLockGrace(grace time.Duration) Option {
-	return func(i *idx) {
-		if grace > 0 {
-			i.lockGrace = grace
-		}
-	}
+	// LockGrace is the quarantine window applied after a lease expires. It is a
+	// fixed recovery window rather than a fraction of the ttl: the window covers
+	// the previous holder's in-flight work, which has nothing to do with how long
+	// the lease was meant to last. A 1s lease gets the same window as a 1h one.
+	// Zero means DefaultGrace.
+	LockGrace time.Duration
 }
 
-func New(folder string, opts ...Option) (Client, error) {
-	if err := os.MkdirAll(folder, 0o755); err != nil {
+func (c Config) New() (Client, error) {
+	if c.Folder == "" {
+		return nil, fmt.Errorf("config: folder is required")
+	}
+	if err := os.MkdirAll(c.Folder, 0o755); err != nil {
 		return nil, err
+	}
+	grace := c.LockGrace
+	if grace <= 0 {
+		grace = DefaultGrace
 	}
 	cli := &idx{
 		closed:    make(chan struct{}),
-		logFolder: folder,
+		logFolder: c.Folder,
 		locks:     map[string]*lockEntry{},
 		holds:     map[string]*LockHandle{},
-		lockGrace: DefaultGrace,
+		lockGrace: grace,
 		now:       time.Now,
-	}
-	for _, opt := range opts {
-		opt(cli)
 	}
 	err := cli.rangeLogs(func(path string) error {
 		f, err := os.Open(path)

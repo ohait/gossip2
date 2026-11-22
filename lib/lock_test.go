@@ -143,18 +143,27 @@ func TestGraceIsIndependentOfTTL(t *testing.T) {
 	}
 }
 
-func TestLockGraceOption(t *testing.T) {
-	i := newTestIdx()
-	if i.lockGrace != DefaultGrace {
-		t.Fatalf("default grace is %v, want %v", i.lockGrace, DefaultGrace)
+func TestLockGraceConfig(t *testing.T) {
+	for _, tc := range []struct {
+		in   time.Duration
+		want time.Duration
+	}{
+		{0, DefaultGrace},            // zero means the default
+		{-time.Second, DefaultGrace}, // a nonsense value must not disable the quarantine
+		{5 * time.Second, 5 * time.Second},
+	} {
+		cli, err := Config{Folder: t.TempDir(), LockGrace: tc.in}.New()
+		if err != nil {
+			t.Fatalf("new with grace %v: %v", tc.in, err)
+		}
+		defer cli.Close()
+		if got := cli.(*idx).lockGrace; got != tc.want {
+			t.Fatalf("grace %v resolved to %v, want %v", tc.in, got, tc.want)
+		}
 	}
-	WithLockGrace(5 * time.Second)(i)
-	if i.lockGrace != 5*time.Second {
-		t.Fatalf("WithLockGrace ignored: %v", i.lockGrace)
-	}
-	WithLockGrace(0)(i) // a nonsense value must not disable the quarantine
-	if i.lockGrace != 5*time.Second {
-		t.Fatalf("zero grace clobbered the configured value: %v", i.lockGrace)
+
+	if _, err := (Config{}).New(); err == nil {
+		t.Fatal("a config without a folder must fail")
 	}
 }
 
@@ -270,7 +279,7 @@ func TestLockValidation(t *testing.T) {
 func TestLeasesAreNotPersisted(t *testing.T) {
 	folder := t.TempDir()
 
-	i1, err := New(folder)
+	i1, err := Config{Folder: folder}.New()
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -286,7 +295,7 @@ func TestLeasesAreNotPersisted(t *testing.T) {
 		t.Fatal("a handle from a closed client must not extend")
 	}
 
-	i2, err := New(folder)
+	i2, err := Config{Folder: folder}.New()
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}

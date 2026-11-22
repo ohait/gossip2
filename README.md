@@ -61,7 +61,7 @@ handle.Extends()  error     // renew the lease; fails once the lease is dead
 handle.Release()  error     // free the key immediately
 ```
 
-A lease is held for `ttl` and then enters a fixed cooldown of 30 seconds (independent of `ttl`, configurable with `lib.WithLockGrace` or the server's `-lock-grace`) during which nobody can take the key. Expiry is terminal: an expired lease can neither be extended nor released. An explicit `Release()` skips the cooldown. Ownership is proven by a CAS version the handle carries internally, so a handle survives a reconnect: the lease lives in the server, not in the connection.
+A lease is held for `ttl` and then enters a fixed cooldown of 30 seconds (independent of `ttl`, set with `lib.Config{Folder: ..., LockGrace: G}.New()` or the server's `-lock-grace`) during which nobody can take the key. Expiry is terminal: an expired lease can neither be extended nor released. An explicit `Release()` skips the cooldown. Ownership is proven by a CAS version the handle carries internally, so a handle survives a reconnect: the lease lives in the server, not in the connection.
 
 A client blocks like any other contender on a key it already holds; reentrancy is not part of the API.
 
@@ -95,7 +95,7 @@ import (
 )
 
 func main() {
-    cli, err := lib.New("/path/to/log/folder")
+    cli, err := lib.Config{Folder: "/path/to/log/folder"}.New()
     if err != nil {
         log.Fatal(err)
     }

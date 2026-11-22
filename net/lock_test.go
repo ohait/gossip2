@@ -11,7 +11,7 @@ import (
 
 func lockServer(t *testing.T, addr string) (*gossip.Server, lib.Client) {
 	// a short quarantine keeps the cooldown tests fast; production uses DefaultGrace
-	impl, err := lib.New("locktest-"+addr, lib.WithLockGrace(150*time.Millisecond))
+	impl, err := lib.Config{Folder: "locktest-" + addr, LockGrace: 150 * time.Millisecond}.New()
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}

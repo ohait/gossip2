@@ -36,7 +36,7 @@ func rawConn(addr string) (net.Conn, *enc.Buffer, error) {
 }
 
 func testServer(name, addr string) (*Server, lib.Client) {
-	impl, err := lib.New(name, lib.WithLockGrace(250*time.Millisecond))
+	impl, err := lib.Config{Folder: name, LockGrace: 250 * time.Millisecond}.New()
 	if err != nil {
 		panic(err)
 	}
