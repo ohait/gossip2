@@ -1,6 +1,8 @@
 package gossip
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -20,6 +22,7 @@ func New(addr string) (Client, error) {
 	client := &tcpClient{
 		closing: make(chan struct{}),
 		addr:    addr,
+		holds:   map[string]*lib.LockHandle{},
 	}
 	// this ch will get an error when connecting the first time
 	// providing feedback for invalid setup but allow for reconnection
@@ -36,6 +39,8 @@ type tcpClient struct {
 	buf     enc.Buffer
 	subs    sync.Map[uint64, *sub]
 	pending sync.Map[uint64, func(msg)]
+	mu      sync.Mutex
+	holds   map[string]*lib.LockHandle // newest handle per key, released on Close
 }
 
 type sub struct {
@@ -96,6 +101,117 @@ func (c *tcpClient) Publish(topic string, id string, v lib.Version, message []by
 		}
 		return 0, fmt.Errorf("cas failed: %s", msg.message)
 	}
+}
+
+// request sends a request and waits for the ack/nack. A nack with v != 0 is a
+// "try again at v" hint (lock contention), not a hard failure.
+func (c *tcpClient) request(cmd byte, id string, v Version, payload []byte) (msg, error) {
+	rid := rand.Uint64()
+	ch := make(chan msg, 1)
+	c.pending.Store(rid, func(x msg) {
+		ch <- x
+	})
+	defer c.pending.Delete(rid)
+
+	if err := (msg{cmd: cmd, rid: rid, id: id, v: v, message: payload}).write(&c.buf); err != nil {
+		return msg{}, fmt.Errorf("failed to send %c request: %w", cmd, err)
+	}
+	select {
+	case m := <-ch:
+		return m, nil
+	case <-c.closing:
+		return msg{}, errors.New("client closed")
+	}
+}
+
+// Lock implements [gossip.Client]. It blocks until the key is free, timeout
+// elapses, or the client is closed.
+func (c *tcpClient) Lock(key string, ttl, timeout time.Duration) (*lib.LockHandle, error) {
+	if err := lib.ValidateLockKey(key); err != nil {
+		return nil, err
+	}
+	if err := lib.ValidateTTL(ttl); err != nil {
+		return nil, err
+	}
+	if err := lib.ValidateTimeout(timeout); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(lockReq{TTL: int64(ttl), Timeout: int64(timeout)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode lock request: %w", err)
+	}
+
+	end := time.Now().Add(timeout)
+	for {
+		m, err := c.request(lock, key, 0, payload)
+		if err != nil {
+			return nil, err
+		}
+		switch m.cmd {
+		case ack:
+			h := lib.NewLockHandle(key, m.v, time.Now().Add(ttl), ttl,
+				func(v Version, ttl time.Duration) (Version, time.Time, error) {
+					return c.extendLock(key, v, ttl)
+				},
+				func(v Version) error {
+					return c.releaseLock(key, v)
+				})
+			c.mu.Lock()
+			c.holds[key] = h
+			c.mu.Unlock()
+			return h, nil
+
+		case nack:
+			if m.v == 0 {
+				// hard failure: bad arguments, connection closed, server error
+				return nil, fmt.Errorf("lock %q: %s", key, m.message)
+			}
+			// the key is held; m.v is the instant it becomes free
+			if !time.Now().Before(end) {
+				return nil, lib.ErrLockTimeout
+			}
+			wait := min(time.Unix(0, int64(m.v)).Sub(time.Now()), end.Sub(time.Now()))
+			if wait < lib.MinLockSleep {
+				wait = lib.MinLockSleep
+			}
+			select {
+			case <-time.After(wait):
+			case <-c.closing:
+				return nil, errors.New("client closed")
+			}
+
+		default:
+			return nil, fmt.Errorf("unexpected lock response: %v", m.cmd)
+		}
+	}
+}
+
+func (c *tcpClient) extendLock(key string, v Version, ttl time.Duration) (Version, time.Time, error) {
+	payload, err := json.Marshal(lockReq{TTL: int64(ttl)})
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("failed to encode lock request: %w", err)
+	}
+	m, err := c.request(lockExtend, key, v, payload)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	if m.cmd != ack {
+		return 0, time.Time{}, fmt.Errorf("extend lock %q: %s", key, m.message)
+	}
+	// the server's deadline is max(old, now+ttl); the client only needs this
+	// locally for backoff and logging, so the approximation is fine.
+	return m.v, time.Now().Add(ttl), nil
+}
+
+func (c *tcpClient) releaseLock(key string, v Version) error {
+	m, err := c.request(lockRelease, key, v, nil)
+	if err != nil {
+		return err
+	}
+	if m.cmd != ack {
+		return fmt.Errorf("release lock %q: %s", key, m.message)
+	}
+	return nil
 }
 
 // Signal implements [gossip.Client].
@@ -256,14 +372,27 @@ func (c *tcpClient) connect(ch chan error) error {
 	return c.loop()
 }
 
-// Close closes the connection to the server.
+// Close closes the connection to the server, releasing any lease still held.
 func (c *tcpClient) Close() error {
 	select {
 	case <-c.closing:
 		return nil
 	default:
-		close(c.closing) // stop reconnecting, including while disconnected
 	}
+
+	// release the leases while the connection is still usable
+	c.mu.Lock()
+	holds := c.holds
+	c.holds = map[string]*lib.LockHandle{}
+	c.mu.Unlock()
+	for _, h := range holds {
+		if err := h.Release(); err != nil {
+			enc.LOG("release on close: %v", err)
+			break
+		}
+	}
+
+	close(c.closing) // stop reconnecting, including while disconnected
 	enc.LOG("closing connection")
 	if c.conn == nil {
 		return nil

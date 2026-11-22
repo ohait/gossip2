@@ -13,6 +13,7 @@ type Client interface {
 	Signal(topic string, id string, data []byte) error
 	Publish(topic string, id string, old Version, data []byte) (Version, error)
 	Subscribe(topic string, h Handler) (func(), error)
+	Lock(key string, ttl, timeout time.Duration) (*LockHandle, error)
 	Close() error
 }
 
@@ -77,13 +78,36 @@ func convertV1(path string) (string, error) {
 	return newPath, os.Remove(path)
 }
 
-func New(folder string) (Client, error) {
+// Option configures the client at construction.
+type Option func(*idx)
+
+// WithLockGrace sets the quarantine window applied after a lease expires.
+// It is a fixed recovery window rather than a fraction of the ttl: the window
+// covers the previous holder's in-flight work, which has nothing to do with how
+// long the lease was meant to last. A 1s lease gets the same window as a 1h one.
+// Values <= 0 are ignored; the default is DefaultGrace.
+func WithLockGrace(grace time.Duration) Option {
+	return func(i *idx) {
+		if grace > 0 {
+			i.lockGrace = grace
+		}
+	}
+}
+
+func New(folder string, opts ...Option) (Client, error) {
 	if err := os.MkdirAll(folder, 0o755); err != nil {
 		return nil, err
 	}
 	cli := &idx{
 		closed:    make(chan struct{}),
 		logFolder: folder,
+		locks:     map[string]*lockEntry{},
+		holds:     map[string]*LockHandle{},
+		lockGrace: DefaultGrace,
+		now:       time.Now,
+	}
+	for _, opt := range opts {
+		opt(cli)
 	}
 	err := cli.rangeLogs(func(path string) error {
 		f, err := os.Open(path)
@@ -124,7 +148,11 @@ func New(folder string) (Client, error) {
 		enc.LOG("log %q has %d/%d stale bytes", l.f.Name(), l.stale.Load(), int(l.total.Load()))
 	}
 	go func() {
-		// compact loop
+		// housekeeping: compact log files, then prune dead leases. The lease
+		// sweep is hygiene only — the acquire path already overwrites dead
+		// entries — so it rides the compaction tick instead of its own timer.
+		// A dead entry can linger at most one tick; no key is ever handed out
+		// too early because of it.
 		sleep := 5 * time.Second
 		for {
 			select {
@@ -132,9 +160,11 @@ func New(folder string) (Client, error) {
 			case <-cli.closed:
 				return
 			}
-			err := cli.compact()
-			if err != nil {
+			if err := cli.compact(); err != nil {
 				enc.LOG("compact error: %v", err)
+			}
+			if n := cli.SweepLocks(); n > 0 {
+				enc.LOG("swept %d expired lock(s)", n)
 			}
 		}
 	}()
