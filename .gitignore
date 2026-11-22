@@ -33,3 +33,6 @@ logs*/
 .idea/
 .vscode/
 .poolside/
+
+# macOS
+.DS_Store
