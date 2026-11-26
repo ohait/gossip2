@@ -19,6 +19,7 @@ import (
 
 func main() {
 	listenAddr := flag.String("l", "", "listen address (host:port, :port, or host)")
+	lockGrace := flag.Duration("lock-grace", lib.DefaultGrace, "quarantine window after a lock lease expires")
 	flag.Parse()
 
 	args := flag.Args()
@@ -58,7 +59,7 @@ func main() {
 	listenAddrParsed := net.JoinHostPort(host, port)
 
 	// Create the client (which manages logs)
-	client, err := lib.New(folder)
+	client, err := lib.Config{Folder: folder, LockGrace: *lockGrace}.New()
 	if err != nil {
 		log.Fatalf("failed to create client: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	"github.com/ohait/gossip2/enc"
 	lib "github.com/ohait/gossip2/lib"
@@ -196,6 +197,56 @@ func (conn *conn) handleOne(req, res *msg) (err error) {
 		}
 		return nil
 
+	case lock:
+		lr, err := decodeLockReq(req.message)
+		if err != nil {
+			return err
+		}
+		ttl, timeout := time.Duration(lr.TTL), time.Duration(lr.Timeout)
+		if err := lib.ValidateLockKey(req.id); err != nil {
+			return err
+		}
+		if err := lib.ValidateTTL(ttl); err != nil {
+			return err
+		}
+		if err := lib.ValidateTimeout(timeout); err != nil {
+			return err
+		}
+		v, wake, ok := conn.cli.TryLock(req.id, ttl)
+		if !ok {
+			// not an error the client should give up on: v carries the instant
+			// the key becomes free, and the client retries at that moment.
+			res.v = Version(wake.UnixNano())
+			return fmt.Errorf("key %q is locked until %s", req.id, wake.Format(time.RFC3339Nano))
+		}
+		res.v = v
+		return nil
+
+	case lockExtend:
+		lr, err := decodeLockReq(req.message)
+		if err != nil {
+			return err
+		}
+		ttl := time.Duration(lr.TTL)
+		if err := lib.ValidateLockKey(req.id); err != nil {
+			return err
+		}
+		if err := lib.ValidateTTL(ttl); err != nil {
+			return err
+		}
+		v, _, err := conn.cli.ExtendLock(req.id, req.v, ttl)
+		if err != nil {
+			return err
+		}
+		res.v = v
+		return nil
+
+	case lockRelease:
+		if err := lib.ValidateLockKey(req.id); err != nil {
+			return err
+		}
+		return conn.cli.ReleaseLock(req.id, req.v)
+
 	default:
 		return fmt.Errorf("unknown command: %v", req.cmd)
 	}
@@ -206,4 +257,7 @@ type rawClient interface {
 	PublishRaw(topic string, id string, v Version, data []byte) (Version, error)
 	SignalRaw(topic string, id string, data []byte) error
 	SubscribeRaw(topic string, h lib.Handler) (func(), error)
+	TryLock(key string, ttl time.Duration) (Version, time.Time, bool)
+	ExtendLock(key string, v Version, ttl time.Duration) (Version, time.Time, error)
+	ReleaseLock(key string, v Version) error
 }

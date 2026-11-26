@@ -26,6 +26,27 @@ type idx struct {
 	sealedLogs []*logFile
 
 	topics sync.Map[string, *topicIdx]
+
+	// leases are in memory only: a restart wipes them.
+	// lockMu guards the whole table, which keeps the state machine trivial
+	// to reason about; lock operations are microseconds.
+	lockMu sync.Mutex
+	locks  map[string]*lockEntry
+
+	// quarantine window after a lease expires, independent of the ttl
+	lockGrace time.Duration
+
+	// handles this client still holds, newest per key, released on Close
+	holds map[string]*LockHandle
+
+	// injectable clock, used by the tests
+	now func() time.Time
+}
+
+type lockEntry struct {
+	key      string
+	version  Version // CAS guard, bumped on acquire and every extend
+	deadline time.Time
 }
 
 type topicIdx struct {
@@ -211,6 +232,16 @@ func (i *idx) SubscribeRaw(topic string, h Handler) (func(), error) {
 // Close stops the client and releases resources.
 func (i *idx) Close() error {
 	close(i.closed)
+
+	i.lockMu.Lock()
+	holds := i.holds
+	i.holds = map[string]*LockHandle{}
+	i.lockMu.Unlock()
+	for _, h := range holds {
+		if err := h.Release(); err != nil {
+			enc.LOG("release on close: %v", err)
+		}
+	}
 
 	i.mu.Lock()
 	defer i.mu.Unlock()
